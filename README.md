@@ -1,43 +1,103 @@
-# 통합 주식 분석 및 트레이딩 시스템
+# 통합 주식 분석 및 트레이딩 시스템 (Integrated Stock Analysis and Trading System)
 
-## 🚀 빠른 시작
+## 🌟 프로젝트 목표 (Project Goal)
+본 프로젝트는 실시간 주식 데이터 수집, AI 기반 가격 예측, 뉴스 감성 분석, 기술적 지표 및 경제 지표 분석 등을 통합적으로 제공하여 사용자가 정보에 입각한 투자 결정을 내리고 자동화된 트레이딩 전략을 실행할 수 있도록 지원하는 시스템을 구축하는 것을 목표로 합니다.  
+특히, Investing.com과 같은 외부 소스에서 경제 지표 캘린더 데이터를 수집하여 분석에 활용하고, 이를 다른 분석 결과(ML, 뉴스 감성, 기술적 지표)와 종합하여 기간별 시장 상승/하락 예측을 제공하는 것을 주요 기능으로 포함합니다.
 
-### 1. 환경 설정
-```bash
-pip install -r requirements.txt
-```
+## 🚀 빠른 시작 (Quick Start)
 
-### 2. 설정 파일 수정
-`config/config.json` 파일에서 API 키를 설정하세요.
+1. **환경 설정 (Environment Setup)**  
+    ```bash
+    pip install -r requirements.txt
+    # requirements.txt에 webdriver-manager가 포함되어 있어야 합니다. 없다면 아래 명령어로 설치:
+    # pip install webdriver-manager selenium pandas
+    ```
 
-### 3. 실행
-```bash
-python main.py
-```
+2. **설정 파일 수정 (Modify Configuration File)**  
+    `user_config/config.json` 파일에서 API 키 (Alpha Vantage, NewsAPI 등) 및 데이터베이스 설정을 확인하고 필요시 수정하세요.  
+    기본 설정 파일은 `config/settings.py` 에 정의되어 있으며, 최초 실행 시 `user_config` 디렉토리에 `config.json`이 생성될 수 있습니다.
 
-## 📁 프로젝트 구조
+3. **실행 (Execution)**  
+    ```bash
+    python main.py
+    ```
 
-- `core/`: 핵심 엔진 (컨트롤러, 이벤트 매니저, 워크플로우)
-- `data/`: 데이터 수집 및 저장
-- `analysis/`: AI/ML 모델 및 분석
-- `trading/`: 거래 전략 및 실행
-- `ui/`: 사용자 인터페이스
-- `utils/`: 유틸리티 함수들
+4. **📁 프로젝트 구조 (Project Structure)**  
+    ```
+    core/                        핵심 엔진 (컨트롤러, 이벤트 매니저, 워크플로우 엔진)
+    data/                        데이터 수집 및 저장
+      ├─ database_manager.py: (구현 예정) DB 연동 관리
+      ├─ models.py: (생성 예정) SQLAlchemy 데이터 모델 정의
+      ├─collectors/                 외부 데이터 수집기
+         ├─ economic_calendar_collector.py  : Investing.com 경제 지표 캘린더 수집 (Selenium 기반)
+         ├─ news_collector.py               : (현재 core/controller.py에 통합) 뉴스 데이터 수집
+         └─ stock_data_collector.py         : (현재 core/controller.py에 통합) 주식 데이터 수집 (yfinance)
+    analysis/                    AI/ML 모델 및 분석
+      ├─ models.py: (생성 예정) SQLAlchemy 데이터 모델 정의
+      ├─ sentiment/               뉴스 감성 분석 모듈 (news_sentiment.py)
+      └─ technical/
+          └─ indicators.py       기술적 지표 계산 함수 (SMA, EMA, RSI, MACD, 볼린저 밴드 등)
+    models/                      (생성 예정) ML/DL 모델 구현부
+    trading/                     거래 전략 및 실행
+      ├─ execution/               주문 실행 모듈 (order_manager.py)
+      ├─ portfolio/               포트폴리오 관리 모듈 (portfolio_manager.py)
+      └─ strategy/                트레이딩 전략 (base_strategy.py, ml_strategy.py)
+    ui/                          사용자 인터페이스 (PyQt5)
+      ├─ dialogs/                 설정 대화상자 (settings_dialog.py)
+      ├─ widgets/                 차트/데이터 표시 (chart_widget.py, data_widget.py, trading_widget.py)
+      └─ styles/                  QSS 스타일 시트 (dark_style.qss)
+    utils/                       유틸리티 함수 (logger.py, scheduler.py)
+    config/                      애플리케이션 설정 관리 (settings.py)
+    user_config/                 사용자 설정 파일 저장 (config.json)
+    logs/                        로그 저장
+    main.py                      애플리케이션 진입점
+    requirements.txt             의존성 목록
+    ```
 
-## 🔧 주요 기능
+---
 
-- 실시간 주식 데이터 수집
-- AI 기반 가격 예측 (LSTM + ML)
-- 뉴스 감성 분석
-- 자동 거래 실행
-- 리스크 관리
-- 실시간 포트폴리오 추적
+## ✨ 현재까지 수행한 작업 (Completed Tasks)
+- **코어 시스템 구축**: MainController, EventManager, WorkflowEngine, Scheduler 등 핵심 로직 구현 완료  
+- **데이터 수집 기능**:
+  - 주식 데이터(yfinance), 뉴스 데이터(NewsAPI) 수집 기능 구현 완료
+  - Investing.com 경제 지표 캘린더 수집 기능 구현 및 UI 연동 완료
+- **분석 기능**:
+  - NewsSentimentAnalyzer (NLTK VADER, FinBERT) 구현 완료
+  - 기술적 지표(SMA, EMA, RSI, MACD, 볼린저 밴드 등) 계산 기능 완료 및 UI 연동
+  - 임시 AI 모델 매니저 및 기본 ML 전략 구조 정의
+- **트레이딩 시스템 기초**: OrderManager, PortfolioManager 구현
+- **사용자 인터페이스 (PyQt5)**:
+  - 주요 UI 컴포넌트 구성
+  - 경제/기술 지표 UI 가독성 개선
+  - ChartWidget 범례 및 스타일 개선
+- **설정 및 유틸리티**: Settings 클래스, 로깅 시스템 구축
 
-## ⚠️ 주의사항
+---
 
-이 시스템은 교육 및 연구 목적으로 제작되었습니다.
-실제 거래에 사용하기 전에 충분한 테스트를 거치시기 바랍니다.
+## 📝 향후 할 일 (To-Do List)
 
-## FOR, AI agent
-현재 목표와 목표, 지금까지 수행한 작업, 작업 공간의 파일 및 약간의 할 일을 요약한 README.md 에 요약해주세요.
-그 외에도 이 파일을 최신 상태로 유지해 주세요.
+### Phase 1: 데이터 관리 및 기본 분석 모듈 강화
+- SQLAlchemy 기반 DB 모델 정의 및 구현
+- DB CRUD 기능 개발 및 데이터 수집 태스크에 통합
+- 캐시 + DB 조회 로직 구현
+
+### Phase 2: 핵심 분석 엔진 및 ML 모델 구축
+- 뉴스 감성 + 경제 지표 영향 분석
+- ML/DL 예측 모델 구현 및 학습 파이프라인 설계
+- ModelManager 개선 (학습/저장/예측 기능)
+
+### Phase 3: 통합 분석 및 UI 연동
+- 종합 예측 점수 계산 및 UI 표시 ("AI 분석" 탭)
+- TradingWidget 등 UI 기능 통합 완성
+
+### Phase 4: 트레이딩, 백테스팅 및 고도화
+- 실거래 기능 연동 및 리스크 관리
+- 백테스팅 엔진 설계 및 구현
+- 모델 성능 개선 및 지속적인 시스템 고도화
+
+---
+
+## ⚠️ 주의사항 (Important Notes)
+- 이 시스템은 **교육 및 연구 목적**으로 제작되었습니다.  
+- 실제 거래에 사용하기 전에 **충분한 테스트와 검증**이 필요합니다.  
+- 투자 결정에 따른 모든 책임은 사용자 본인에게 있습니다.
