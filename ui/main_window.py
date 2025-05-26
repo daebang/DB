@@ -58,9 +58,11 @@ class MainWindow(QMainWindow):
         if self.controller:
             try:
                 self.controller.historical_data_updated_signal.connect(self.handle_historical_data_updated)
+                self.controller.technical_indicators_updated_signal.connect(self.handle_technical_indicators_updated) # *** 수정/추가 ***
                 self.controller.realtime_quote_updated_signal.connect(self.handle_realtime_quote_updated)
                 self.controller.news_data_updated_signal.connect(self.handle_news_updated)
                 self.controller.analysis_result_updated_signal.connect(self.handle_analysis_updated)
+                self.controller.economic_data_updated_signal.connect(self.handle_economic_data_updated) # 새 시그널 연결
                 self.controller.connection_status_changed_signal.connect(self.handle_connection_status_changed)
                 self.controller.status_message_signal.connect(self.handle_status_message)
                 self.controller.task_feedback_signal.connect(self.handle_task_feedback)
@@ -167,8 +169,20 @@ class MainWindow(QMainWindow):
 
     def _set_style(self):
         try:
-            current_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
-            qss_file_path = os.path.join(current_dir, "ui", "styles", "dark_style.qss")
+            # 실행 파일 위치 기준으로 경로 설정 (PyInstaller 고려)
+            if getattr(sys, 'frozen', False):
+                current_dir = os.path.dirname(sys.executable)
+            else:
+                current_dir = os.path.dirname(os.path.abspath(__file__)) # main_window.py 위치 기준
+            
+            # ui/styles/dark_style.qss 경로 설정
+            # main_window.py는 ui 폴더 내에 있으므로, 한 단계 위로 올라가서 다시 ui/styles로 접근
+            project_root_ui = os.path.abspath(os.path.join(current_dir, "..")) # ui 폴더의 부모 (프로젝트 루트)
+            qss_file_path = os.path.join(project_root_ui, "ui", "styles", "dark_style.qss")
+            
+            # 만약 main_window.py가 프로젝트 루트에 있다면 아래와 같이 직접 구성
+            # qss_file_path = os.path.join(current_dir, "ui", "styles", "dark_style.qss")
+
             if os.path.exists(qss_file_path):
                 with open(qss_file_path, "r", encoding="utf-8") as f:
                     self.setStyleSheet(f.read())
@@ -179,27 +193,32 @@ class MainWindow(QMainWindow):
             logger.error(f"스타일 시트 로드 중 오류 발생: {e}", exc_info=True)
 
     def _start_trading(self):
-        if self.controller:
-            self.controller.start()
+        if self.controller and hasattr(self.controller, 'start'): # 컨트롤러의 start 메서드 확인
+            # self.controller.start() # 이 start는 MainController의 start로, workflow/scheduler 시작용.
+            # 실제 트레이딩 시스템/전략 시작 로직은 별도로 호출해야 할 수 있음
+            # 현재는 MainController의 start/stop이 앱 전체의 백그라운드 작업 제어로 사용됨.
+            # 트레이딩 "전략"의 시작/중단은 trading_widget을 통해 별도 관리될 수 있음.
+            # 여기서는 버튼 상태만 변경하고, 실제 전략 제어는 TradingWidget과 Controller 연동 필요
+            
             self.start_button.setEnabled(False)
             self.stop_button.setEnabled(True)
-            self.strategy_status.setText("전략: <font color='green'>실행중</font>")
-            self.status_bar.showMessage("트레이딩 시스템 시작됨", 5000)
-            logger.info("트레이딩 시스템 시작됨")
+            self.strategy_status.setText("전략: <font color='green'>실행중 (UI)</font>") # UI 상태만 변경
+            self.status_bar.showMessage("트레이딩 시스템 (UI상) 시작됨", 5000)
+            logger.info("트레이딩 시스템 (UI상) 시작됨. 실제 전략 실행은 컨트롤러/전략 모듈 확인 필요.")
         else:
-            QMessageBox.warning(self, "오류", "컨트롤러가 초기화되지 않았습니다.")
-            logger.error("컨트롤러가 없어 트레이딩 시작 불가")
+            QMessageBox.warning(self, "오류", "컨트롤러 또는 시작 메서드가 초기화되지 않았습니다.")
+            logger.error("컨트롤러 또는 start 메서드가 없어 트레이딩 시작 불가")
 
     def _stop_trading(self):
-        if self.controller:
-            self.controller.stop()
+        if self.controller and hasattr(self.controller, 'stop'): # 컨트롤러의 stop 메서드 확인
+            # self.controller.stop() # 앱의 백그라운드 작업 중지
             self.start_button.setEnabled(True)
             self.stop_button.setEnabled(False)
-            self.strategy_status.setText("전략: <font color='orange'>중단</font>")
-            self.status_bar.showMessage("트레이딩 시스템 중단됨", 5000)
-            logger.info("트레이딩 시스템 중단됨")
+            self.strategy_status.setText("전략: <font color='orange'>중단 (UI)</font>") # UI 상태만 변경
+            self.status_bar.showMessage("트레이딩 시스템 (UI상) 중단됨", 5000)
+            logger.info("트레이딩 시스템 (UI상) 중단됨.")
         else:
-            logger.error("컨트롤러가 없어 트레이딩 중단 불가")
+            logger.error("컨트롤러 또는 stop 메서드가 없어 트레이딩 중단 불가")
 
     def _on_symbol_changed(self, symbol: str):
         logger.info(f"선택된 종목 변경: {symbol}")
@@ -209,7 +228,18 @@ class MainWindow(QMainWindow):
             self.data_widget.set_symbol(symbol) # 여기서도 UI 초기화 및 필요시 데이터 요청
         if hasattr(self.trading_widget, 'set_symbol'):
             self.trading_widget.set_symbol(symbol)
-        # self._refresh_data() # set_symbol 내에서 on_timeframe_or_symbol_changed가 호출되므로 중복일 수 있음
+        
+        # 심볼 변경 시 _initial_data_load 또는 _refresh_data와 유사한 로직으로 새 데이터 요청
+        # ChartWidget의 set_symbol 내부에서 on_timeframe_or_symbol_changed가 호출되어 데이터 요청을 시작함.
+        # DataWidget도 set_symbol에서 필요한 초기화를 하고, controller를 통해 데이터를 요청해야 함.
+        # 여기서는 ChartWidget의 set_symbol이 주 데이터 요청을 트리거한다고 가정.
+        # 필요하다면 MainWindow에서 직접 Controller의 데이터 요청 함수들을 호출.
+        current_timeframe = self.chart_widget.timeframe_combo.currentText() if self.chart_widget else '1일'
+        if self.controller:
+            self.controller.request_realtime_quote(symbol)
+            self.controller.request_news_data(f"{symbol} stock OR {symbol} news")
+            # self.controller.request_economic_calendar_update() # 경제 지표는 심볼 변경과 무관할 수 있음. 필요시.
+            # 분석 요청은 historical data 업데이트 후 자동으로 이루어지도록 Controller에 설계됨.
 
     def _refresh_data(self):
         current_symbol = self.symbol_combo.currentText()
@@ -219,7 +249,12 @@ class MainWindow(QMainWindow):
 
         if self.chart_widget:
             self.chart_widget.price_plot.setTitle(f"{current_symbol} ({current_timeframe}) - 데이터 새로고침 중...")
-            self.chart_widget.clear_chart_items()
+            # ChartWidget의 on_timeframe_or_symbol_changed를 직접 호출하여 데이터 요청
+            if hasattr(self.chart_widget, 'on_timeframe_or_symbol_changed'):
+                 self.chart_widget.on_timeframe_or_symbol_changed()
+            else: # 또는 Controller를 통해 직접 요청
+                if self.controller and hasattr(self.controller, 'request_historical_data'):
+                    self.controller.request_historical_data(current_symbol, current_timeframe)
         if self.data_widget:
             self.data_widget.clear_all_tabs_data() # 데이터 위젯도 초기화
 
@@ -248,9 +283,8 @@ class MainWindow(QMainWindow):
         if self.controller:
             current_symbol = self.symbol_combo.currentText()
             # 실시간 호가 업데이트
-            realtime_data = self.controller.get_cached_realtime_data(current_symbol)
-            if realtime_data and self.data_widget:
-                 self.data_widget.update_realtime_quote_display(realtime_data) # DataWidget에 실시간 호가 업데이트 메서드 필요
+            if hasattr(self.controller, 'request_realtime_quote'): # 컨트롤러에 실시간 데이터 요청
+                self.controller.request_realtime_quote(current_symbol)
 
             # 포지션 업데이트 (예시)
             # positions = self.controller.get_portfolio_positions()
@@ -338,7 +372,7 @@ class MainWindow(QMainWindow):
             logger.info("애플리케이션 종료 취소")
             event.ignore()
 
-    # --- Controller로부터 데이터를 받아 UI를 업데이트하는 슬롯 함수들 ---
+    @pyqtSlot(str, object) # historical_data_updated_signal의 인자에 맞게
     def handle_historical_data_updated(self, symbol: str, data_df_object: object):
         logger.info(f"시그널 수신: MainWindow.handle_historical_data_updated (심볼: {symbol}, 데이터 타입: {type(data_df_object)})")
         if not isinstance(data_df_object, pd.DataFrame):
@@ -351,16 +385,49 @@ class MainWindow(QMainWindow):
         data_df = data_df_object
         if symbol == self.symbol_combo.currentText():
             if self.chart_widget:
-                logger.debug(f"{symbol} 과거 데이터 ({len(data_df)} 행) ChartWidget으로 전달.")
-                self.chart_widget.update_historical_data(data_df.copy())
+                logger.debug(f"{symbol} 원본 과거 데이터 ({len(data_df)} 행) ChartWidget으로 전달.")
+                self.chart_widget.update_historical_data(data_df.copy()) # ChartWidget은 원본 데이터를 받아 기본 차트를 그림
             
             if data_df.empty:
                 self.handle_task_feedback(f"{symbol} 과거 데이터", "데이터 없음 (UI)")
             else:
-                self.handle_task_feedback(f"{symbol} 과거 데이터", "차트 업데이트됨 (UI)")
+                # 기술적 지표 계산은 Controller에서 historical_data_updated_signal과 별도로 technical_indicators_updated_signal을 통해 전달됨
+                # self.handle_task_feedback(f"{symbol} 과거 데이터", "차트 업데이트됨 (UI)") # 이 메시지는 technical_indicators_updated 후로 옮기는 것이 나을 수 있음
+                pass 
         else:
             logger.debug(f"수신된 과거 데이터 ({symbol})가 현재 선택된 심볼({self.symbol_combo.currentText()})과 달라 UI 업데이트 건너뜀.")
 
+    # 기술적 지표 업데이트를 위한 새 슬롯 추가
+    @pyqtSlot(str, str, object)
+    def handle_technical_indicators_updated(self, symbol: str, timeframe: str, data_with_indicators_obj: object):
+        logger.info(f"시그널 수신: MainWindow.handle_technical_indicators_updated (심볼: {symbol}, 기간: {timeframe})")
+        if not isinstance(data_with_indicators_obj, pd.DataFrame):
+            logger.error(f"잘못된 기술적 지표 데이터 타입 수신: {type(data_with_indicators_obj)}")
+            self.handle_task_feedback(f"{symbol} 기술적 지표", "UI 업데이트 실패 (데이터 타입 오류)")
+            return
+
+        data_with_indicators_df = data_with_indicators_obj
+        
+        if symbol == self.symbol_combo.currentText(): # 현재 선택된 심볼에 대해서만 업데이트
+            # DataWidget의 기술적 지표 탭 업데이트
+            if self.data_widget and hasattr(self.data_widget, 'update_technical_indicators_display'):
+                self.data_widget.update_technical_indicators_display(symbol, timeframe, data_with_indicators_df.copy())
+                logger.debug(f"{symbol} ({timeframe}) 기술적 지표 DataWidget에 업데이트됨.")
+
+            # ChartWidget에 기술적 지표 플롯 업데이트
+            if self.chart_widget and hasattr(self.chart_widget, 'update_technical_indicators_on_chart'):
+                # ChartWidget은 이미 update_historical_data에서 기본 데이터를 받았으므로,
+                # 여기서는 지표가 포함된 데이터로 지표만 다시 그리도록 함.
+                # ChartWidget의 timeframe_combo.currentText()와 수신된 timeframe이 일치하는지도 확인 필요
+                if self.chart_widget.timeframe_combo.currentText() == timeframe:
+                    self.chart_widget.update_technical_indicators_on_chart(data_with_indicators_df.copy())
+                    logger.debug(f"{symbol} ({timeframe}) 기술적 지표 ChartWidget에 업데이트됨.")
+                else:
+                    logger.debug(f"ChartWidget의 현재 시간대({self.chart_widget.timeframe_combo.currentText()})와 수신된 지표 데이터의 시간대({timeframe})가 달라 차트 지표 업데이트 건너뜀.")
+            self.handle_task_feedback(f"{symbol} ({timeframe}) 기술적 지표", "UI 업데이트 완료")
+        else:
+            logger.debug(f"수신된 기술적 지표({symbol})가 현재 선택된 심볼({self.symbol_combo.currentText()})과 달라 UI 업데이트 건너뜀.")
+            
     def handle_realtime_quote_updated(self, symbol: str, quote_data: dict):
         logger.info(f"시그널 수신: MainWindow.handle_realtime_quote_updated (심볼: {symbol})")
         if symbol == self.symbol_combo.currentText() and self.data_widget:
@@ -405,6 +472,13 @@ class MainWindow(QMainWindow):
         else:
             logger.warning(f"data_status 라벨이 없어 작업 피드백 표시 불가: {task_name} - {status}")
 
+    def handle_status_message(self, message: str, timeout: int = 3000):
+        if hasattr(self, 'status_bar') and self.status_bar:
+            self.status_bar.showMessage(message, timeout)
+        else:
+            logger.warning(f"상태바가 없어 메시지 표시 불가: {message}")
+
+
     def _initial_data_load(self):
         current_symbol = self.symbol_combo.currentText()
         if hasattr(self, 'chart_widget') and self.chart_widget:
@@ -429,8 +503,25 @@ class MainWindow(QMainWindow):
             if hasattr(self.controller, 'request_realtime_quote'):
                 self.controller.request_realtime_quote(current_symbol)
             if hasattr(self.controller, 'request_news_data'):
-                 self.controller.request_news_data(f"{current_symbol} stock OR {current_symbol} news") # 뉴스 검색어 예시
+                 self.controller.request_news_data(f"{current_symbol} stock OR {current_symbol} news")
+            
+            # 경제 캘린더 데이터 초기 로드 추가 (예: 향후 7일)
+            if hasattr(self.controller, 'request_economic_calendar_update'):
+                self.controller.request_economic_calendar_update(days_future=7) 
+            else:
+                logger.error("컨트롤러에 'request_economic_calendar_update' 메서드가 없습니다.")
+
         else:
             logger.error("컨트롤러가 없어 초기 데이터 로드를 수행할 수 없습니다.")
             if hasattr(self, 'data_status') and self.data_status:
                 self.data_status.setText(f"데이터 ({current_symbol}): <font color='red'>컨트롤러 오류</font>")
+
+    # 경제 캘린더 데이터 처리 핸들러 추가
+    @pyqtSlot(object) # 인자가 pd.DataFrame이므로 object로 받음
+    def handle_economic_data_updated(self, economic_data_df: pd.DataFrame):
+        logger.info(f"시그널 수신: MainWindow.handle_economic_data_updated (데이터 {len(economic_data_df) if economic_data_df is not None else 'None'}개)")
+        if self.data_widget and hasattr(self.data_widget, 'update_economic_indicators_display'):
+            self.data_widget.update_economic_indicators_display(economic_data_df)
+            logger.debug(f"경제 캘린더 데이터 DataWidget에 업데이트됨 ({len(economic_data_df) if economic_data_df is not None else 0}개).")
+        else:
+            logger.warning("DataWidget 또는 update_economic_indicators_display 메서드가 없어 경제 캘린더 UI 업데이트 불가.")

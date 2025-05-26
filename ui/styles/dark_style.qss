@@ -144,18 +144,28 @@ QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {
 }
 
 QTableWidget {
-    background-color: #3C3C3C;
-    color: #E0E0E0;
-    border: 1px solid #505050;
-    gridline-color: #505050; /* 그리드 라인 색상 */
-    selection-background-color: #505050; /* 선택 배경색 */
-    selection-color: #E0E0E0; /* 선택 글자색 */
+    gridline-color: #454545; /* 그리드 라인 색상 */
+    background-color: #2E2E2E; /* 테이블 배경색 */
+    alternate-background-color: #383838; /* 번갈아 나오는 행 배경색 */
+    color: #E0E0E0; /* 기본 글씨 색상 */
 }
-QHeaderView::section { /* 테이블 헤더 */
-    background-color: #454545;
-    color: #E0E0E0;
+
+QTableWidget::item {
+    padding: 5px; /* 셀 내부 여백 */
+    color: #E0E0E0; /* 아이템 글씨 색상 */
+    /* border-bottom: 1px solid #454545; */ /* 각 셀 하단 구분선 (선택적) */
+}
+
+QTableWidget::item:selected {
+    background-color: #505050; /* 선택된 아이템 배경색 */
+    color: #FFFFFF;
+}
+
+QHeaderView::section {
+    background-color: #3E3E3E; /* 헤더 배경색 */
+    color: #E0E0E0; /* 헤더 글씨 색상 */
     padding: 4px;
-    border: 1px solid #505050;
+    border: 1px solid #454545;
     font-weight: bold;
 }
 
@@ -241,13 +251,13 @@ QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
 }
 
 QScrollBar:vertical {
-    border: 1px solid #505050;
-    background: #383838;
-    width: 12px;
-    margin: 15px 0 15px 0;
+    border: 1px solid #303030;
+    background: #2E2E2E;
+    width: 10px;
+    margin: 0px 0px 0px 0px;
 }
 QScrollBar::handle:vertical {
-    background: #606060;
+    background: #505050;
     min-height: 20px;
     border-radius: 5px;
 }

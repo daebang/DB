@@ -3,6 +3,7 @@ from typing import Dict, Optional
 from .base_strategy import BaseStrategy, Signal
 from analysis.models.ml_models import MLTradingModel
 from analysis.models.deep_learning import LSTMTradingModel
+from datetime import datetime
 
 class MLTradingStrategy(BaseStrategy):
     """머신러닝 기반 거래 전략"""

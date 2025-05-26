@@ -95,12 +95,13 @@ class DataWidget(QWidget):
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(5,5,5,5)
 
-        self.technical_table = QTableWidget(0, 2) # 행은 동적으로 추가
-        self.technical_table.setHorizontalHeaderLabels(["지표명", "값"])
-        self.technical_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.technical_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.technical_table = QTableWidget(0, 2) # 행은 동적으로 추가, 컬럼: 지표명, 값
+        self.technical_table.setHorizontalHeaderLabels(["지표명", "현재 값"]) # 헤더 레이블 수정
+        self.technical_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch) # 지표명 컬럼 확장
+        self.technical_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents) # 값 컬럼 내용에 맞게
         self.technical_table.setEditTriggers(QAbstractItemView.NoEditTriggers) # 편집 불가
         self.technical_table.setAlternatingRowColors(True) # 행 색상 교차
+        self.technical_table.setSortingEnabled(True) # 정렬 기능 추가
 
         # 초기에는 비어있음, 데이터 수신 시 채워짐
         layout.addWidget(self.technical_table)
@@ -183,29 +184,145 @@ class DataWidget(QWidget):
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(5,5,5,5)
 
-        self.economic_indicators_table = QTableWidget(0, 3) # 지표명, 현재값, 다음 발표일
-        self.economic_indicators_table.setHorizontalHeaderLabels(["주요 경제 지표", "최근 값", "다음 발표 (예상)"])
-        self.economic_indicators_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.economic_indicators_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.economic_indicators_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.economic_indicators_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.economic_indicators_table.setAlternatingRowColors(True)
+        # 필터링 옵션 (예시: 국가, 중요도 - 추후 구현)
+        # filter_layout = QHBoxLayout()
+        # self.eco_country_filter_combo = QComboBox()
+        # # ... 국가 목록 채우기 ...
+        # self.eco_importance_filter_combo = QComboBox()
+        # self.eco_importance_filter_combo.addItems(["모든 중요도", "높음(★★★)", "중간(★★☆)", "낮음(★☆☆)"])
+        # filter_layout.addWidget(QLabel("국가:"))
+        # filter_layout.addWidget(self.eco_country_filter_combo)
+        # filter_layout.addWidget(QLabel("중요도:"))
+        # filter_layout.addWidget(self.eco_importance_filter_combo)
+        # filter_layout.addStretch()
+        # refresh_button = QPushButton("새로고침")
+        # refresh_button.clicked.connect(self._request_economic_data_refresh) # 컨트롤러에 요청하는 메서드 필요
+        # filter_layout.addWidget(refresh_button)
+        # layout.addLayout(filter_layout)
 
-        # TODO: 컨트롤러를 통해 주요 경제 지표 데이터 로드 및 업데이트 로직 필요
-        # 예시 데이터
-        # self.add_economic_indicator_row("미국 CPI (YoY)", "3.5%", "2025-06-15")
-        # self.add_economic_indicator_row("미 연준 기준금리", "5.50%", "2025-07-01")
+        self.economic_indicators_table = QTableWidget(0, 7) # 컬럼 추가: 시간, 국가, 중요도, 이벤트, 실제, 예상, 이전
+        self.economic_indicators_table.setHorizontalHeaderLabels([
+            "시간", "국가", "중요도", "이벤트", "실제", "예상", "이전"
+        ])
+
+        header = self.economic_indicators_table.horizontalHeader()
+        # 시간, 국가, 중요도, 실제, 예상, 이전 컬럼은 내용에 맞게 자동 조절
+        for i in [0, 1, 2, 4, 5, 6]:
+            header.setSectionResizeMode(i, QHeaderView.ResizeToContents)
+        # 이벤트 컬럼은 남은 공간을 모두 차지하도록 설정 (Stretch)
+        # header.setSectionResizeMode(3, QHeaderView.Stretch)
+        # 사용자가 직접 컬럼 너비를 조절할 수 있도록 Interactive 모드도 고려할 수 있습니다.
+        header.setSectionResizeMode(QHeaderView.Interactive) # 전체 컬럼에 적용
+
+        self.economic_indicators_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.economic_indicators_table.setAlternatingRowColors(True) # 행 번갈아가며 색상
+        self.economic_indicators_table.setSortingEnabled(True)
+        self.economic_indicators_table.setWordWrap(True) # 셀 내용 자동 줄 바꿈 활성화
 
         layout.addWidget(self.economic_indicators_table)
         return widget
+    def update_economic_indicators_display(self, economic_data_df: pd.DataFrame): # 메서드명 변경 및 인자 타입 명시
+        """ 경제 지표 데이터를 받아 테이블에 표시 """
+        if economic_data_df is None:
+            logger.warning("경제 지표 데이터가 None입니다. 테이블을 비웁니다.")
+            self.economic_indicators_table.setRowCount(0)
+            return
 
-    def add_economic_indicator_row(self, name: str, value: str, next_release: str):
-        row_count = self.economic_indicators_table.rowCount()
-        self.economic_indicators_table.insertRow(row_count)
-        self.economic_indicators_table.setItem(row_count, 0, QTableWidgetItem(name))
-        self.economic_indicators_table.setItem(row_count, 1, QTableWidgetItem(value))
-        self.economic_indicators_table.setItem(row_count, 2, QTableWidgetItem(next_release))
+        self.economic_indicators_table.setSortingEnabled(False) # 업데이트 중 정렬 비활성화
+        self.economic_indicators_table.setRowCount(0) # 기존 내용 삭제
 
+        if economic_data_df.empty:
+            logger.info("표시할 경제 지표 데이터가 없습니다.")
+            self.economic_indicators_table.setSortingEnabled(True)
+            return
+        
+        # 기본 글씨 색상 (다크 테마에 어울리도록)
+        default_text_color = QColor("#E0E0E0") # 밝은 회색 (스타일시트에서 설정하는 것이 더 좋음)
+
+        for index, row in economic_data_df.iterrows():
+            row_count = self.economic_indicators_table.rowCount()
+            self.economic_indicators_table.insertRow(row_count)
+
+            dt_str = row['datetime'].strftime('%Y-%m-%d %H:%M') if pd.notnull(row['datetime']) else "-"
+            dt_item = QTableWidgetItem(dt_str)
+            
+            country_str = str(row.get('country_code', '-'))
+            country_item = QTableWidgetItem(country_str)
+            
+            importance_val = row.get('importance', 0)
+            # 중요도에 따라 색상이나 텍스트를 다르게 표시
+            if importance_val == 3:
+                importance_str = "★★★"
+                importance_color = QColor("red")
+            elif importance_val == 2:
+                importance_str = "★★☆"
+                importance_color = QColor("orange")
+            elif importance_val == 1:
+                importance_str = "★☆☆"
+                importance_color = QColor("yellow")
+            else:
+                importance_str = "-"
+                importance_color = default_text_color # 중요도 없는 경우 기본색
+            
+            importance_item = QTableWidgetItem(importance_str)
+            importance_item.setTextAlignment(Qt.AlignCenter)
+            importance_item.setForeground(importance_color) # 중요도 색상 적용
+
+            event_str = str(row.get('event', '-'))
+            event_item = QTableWidgetItem(event_str)
+            # 이벤트 셀은 자동으로 줄바꿈 되므로, setWordWrap은 테이블 전체에 적용
+            
+            actual_str = str(row.get('actual_raw', '-'))
+            actual_item = QTableWidgetItem(actual_str)
+            
+            forecast_str = str(row.get('forecast_raw', '-'))
+            forecast_item = QTableWidgetItem(forecast_str)
+            
+            previous_str = str(row.get('previous_raw', '-'))
+            previous_item = QTableWidgetItem(previous_str)
+            
+            # 값에 따른 색상 강조 (실제 vs 예상)
+            actual_val_numeric = row.get('actual') # 파싱된 숫자 값
+            forecast_val_numeric = row.get('forecast')
+
+            surprise_color = None
+            if pd.notnull(actual_val_numeric) and pd.notnull(forecast_val_numeric):
+                if actual_val_numeric > forecast_val_numeric:
+                    surprise_color = QColor("lightgreen") # 예상보다 좋음 (긍정적 서프라이즈)
+                elif actual_val_numeric < forecast_val_numeric:
+                    surprise_color = QColor("#FF7F7F") # 예상보다 나쁨 (부정적 서프라이즈 - 연한 빨강)
+            
+            if surprise_color:
+                actual_item.setBackground(surprise_color)
+                # 글씨가 잘 보이도록 배경색에 따라 글씨색 조정 (선택적)
+                # actual_item.setForeground(QColor("black"))
+
+
+            # 모든 아이템에 기본 글씨 색상 적용 (스타일시트에서 하는 것이 더 좋음)
+            for item in [dt_item, country_item, event_item, actual_item, forecast_item, previous_item]:
+                item.setForeground(default_text_color)
+            # 중요도 아이템은 위에서 개별 색상 적용됨
+
+            self.economic_indicators_table.setItem(row_count, 0, dt_item)
+            self.economic_indicators_table.setItem(row_count, 1, country_item)
+            self.economic_indicators_table.setItem(row_count, 2, importance_item)
+            self.economic_indicators_table.setItem(row_count, 3, event_item)
+            self.economic_indicators_table.setItem(row_count, 4, actual_item)
+            self.economic_indicators_table.setItem(row_count, 5, forecast_item)
+            self.economic_indicators_table.setItem(row_count, 6, previous_item)
+            
+            event_link = row.get('event_link')
+            if event_link:
+                event_item.setToolTip(f"상세 정보 링크: {event_link}\n클릭하여 열기 (미구현)")
+                # 더블클릭 시 링크 열기 기능은 QTableWidget의 itemDoubleClicked 시그널을 연결하여 구현 가능
+
+        self.economic_indicators_table.setSortingEnabled(True)
+        # 테이블의 행 높이를 내용에 맞게 조절 (줄바꿈된 텍스트가 다 보이도록)
+        self.economic_indicators_table.resizeRowsToContents()
+        logger.info(f"경제 지표 테이블 업데이트 완료: {len(economic_data_df)}개 항목.")
+    # add_economic_indicator_row는 이제 update_economic_indicators_display로 대체됨
+    # def add_economic_indicator_row(self, name: str, value: str, next_release: str):
+    #     pass
 
     def set_symbol(self, symbol: str):
         """종목 변경 시 호출되어 UI 초기화 또는 데이터 요청"""
@@ -253,10 +370,12 @@ class DataWidget(QWidget):
         self.overall_signal_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #E0E0E0;") # 기본색
         self.analysis_summary_text.clear()
 
-        # 경제 지표 탭 (심볼 변경과 무관할 수 있으나, 필요시 초기화)
-        # self.economic_indicators_table.setRowCount(0)
 
-
+        # 경제 지표 탭은 심볼 변경과 무관하므로 여기서는 초기화하지 않음.
+        # if hasattr(self, 'economic_indicators_table'):
+        #     self.economic_indicators_table.setRowCount(0) # 이 줄을 주석 처리하거나 삭제
+       
+        logger.debug("심볼 관련 데이터 위젯 탭 내용 초기화됨 (경제 지표 탭 제외).")
     # --- MainWindow의 핸들러 함수들로부터 호출될 업데이트 메서드들 ---
     def update_realtime_quote_display(self, quote_data: dict):
         """ 실시간 호가 데이터를 받아 UI에 표시 (MainWindow에서 호출) """
@@ -292,17 +411,57 @@ class DataWidget(QWidget):
              self.last_updated_label.setText("최종 업데이트: -")
 
 
-    def update_technical_indicators_display(self, indicators: dict):
-        """ 기술적 지표 데이터를 받아 테이블에 표시 """
-        self.technical_table.setRowCount(0) # 기존 내용 삭제
-        for name, value in indicators.items():
-            row_count = self.technical_table.rowCount()
-            self.technical_table.insertRow(row_count)
-            self.technical_table.setItem(row_count, 0, QTableWidgetItem(str(name)))
-            item_value = QTableWidgetItem(f"{value:.2f}" if isinstance(value, (float, int)) else str(value))
-            item_value.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            self.technical_table.setItem(row_count, 1, item_value)
+    def update_technical_indicators_display(self, symbol: str, timeframe: str, data_with_indicators: pd.DataFrame):
+        """기술적 지표 데이터를 받아 테이블에 표시 (가장 최근 값)"""
+        if data_with_indicators is None or data_with_indicators.empty:
+            logger.warning(f"{symbol} ({timeframe})에 대한 기술적 지표 데이터가 없습니다.")
+            self.technical_table.setRowCount(0)
+            return
 
+        self.technical_table.setSortingEnabled(False)
+        self.technical_table.setRowCount(0)
+        
+        indicator_cols = [col for col in data_with_indicators.columns if any(kw in col for kw in ['SMA_', 'EMA_', 'RSI_', 'MACD', 'BB_'])] # 예시 키워드
+        
+        if not indicator_cols:
+            logger.info(f"{symbol} ({timeframe}): 표시할 기술적 지표 컬럼이 데이터에 없습니다.")
+            self.technical_table.setSortingEnabled(True)
+            return
+
+        if data_with_indicators.empty: # 추가적인 빈 DataFrame 체크
+            logger.info(f"{symbol} ({timeframe}): 기술적 지표 DataFrame이 비어있습니다.")
+            self.technical_table.setSortingEnabled(True)
+            return
+            
+        latest_indicators = data_with_indicators.iloc[-1] 
+
+        default_text_color = QColor("#E0E0E0")
+
+        for col_name in indicator_cols:
+            if col_name in latest_indicators:
+                value = latest_indicators[col_name]
+                if pd.isna(value):
+                    value_str = "-"
+                elif isinstance(value, float):
+                    value_str = f"{value:.2f}" 
+                else:
+                    value_str = str(value)
+                
+                row_count = self.technical_table.rowCount()
+                self.technical_table.insertRow(row_count)
+                
+                item_name = QTableWidgetItem(col_name)
+                item_name.setForeground(default_text_color)
+                
+                item_value = QTableWidgetItem(value_str)
+                item_value.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                item_value.setForeground(default_text_color)
+                
+                self.technical_table.setItem(row_count, 0, item_name)
+                self.technical_table.setItem(row_count, 1, item_value)
+
+        self.technical_table.setSortingEnabled(True)
+        logger.info(f"{symbol} ({timeframe}) 기술적 지표 테이블 업데이트 완료 ({len(indicator_cols)}개 지표).")
     def update_news_display(self, news_items: list):
         """ 뉴스 목록 및 감성 요약 정보를 받아 UI에 표시 """
         self.news_list_widget.clear()
@@ -401,12 +560,6 @@ class DataWidget(QWidget):
         summary_lines.append(f"\n종합 의견 근거: {signal_details}")
         self.analysis_summary_text.setPlainText("\n".join(summary_lines))
 
-    def update_economic_indicators(self, indicators: list):
-        """ 경제 지표 데이터를 받아 테이블에 표시 """
-        self.economic_indicators_table.setRowCount(0)
-        for indicator in indicators: # indicator는 {'name': ..., 'value': ..., 'next_release': ...} 형태의 dict라고 가정
-            self.add_economic_indicator_row(
-                indicator.get('name','-'),
-                indicator.get('value','-'),
-                indicator.get('next_release','-')
-            )
+    # update_economic_indicators는 update_economic_indicators_display로 대체됨
+    # def update_economic_indicators(self, indicators: list):
+    #     pass
