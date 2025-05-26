@@ -99,15 +99,20 @@ class ChartWidget(QWidget):
         super().__init__()
         self.controller = controller
         self.symbol = "AAPL"
-        self.current_data = None
+        self.current_data = None # 원본 OHLCV 데이터 (지표 미포함)
+        self.current_data_with_ta = None # 기술적 지표 포함된 데이터
         self.candlestick_item = None
         self.price_line_item = None
         self.volume_bar_item = None
 
+        self.sma_plot_items = {}
+        self.ema_plot_items = {}
+        self.bollinger_plot_items = {}
+
         self.v_line = None
         self.h_line = None
         self.price_text_item = None
-        self.date_text_item = None # AttributeError 방지를 위해 __init__에서 None으로 초기화
+        self.date_text_item = None
 
         self.setup_ui()
         self.price_plot.setTitle(f"{self.symbol} (데이터 로딩 중...)")
@@ -141,6 +146,7 @@ class ChartWidget(QWidget):
         self.price_plot.setDownsampling(auto=True, mode='peak')
         self.price_plot.setClipToView(True)
         self.price_plot.setAutoVisible(y=True)
+        self.price_plot.addLegend() # *** 범례 추가 ***
 
         self.chart_widget_layout.nextRow()
         self.volume_plot = self.chart_widget_layout.addPlot(row=1, col=0)
@@ -207,14 +213,15 @@ class ChartWidget(QWidget):
     def update_historical_data(self, data_df: pd.DataFrame):
         if data_df is None or data_df.empty:
             logger.warning(f"{self.symbol}에 대한 과거 데이터가 비어있습니다.")
-            self.current_data = None
-            self.clear_chart_items()
+            self.current_data = None # 원본 데이터 저장
+            self.current_data_with_ta = None # TA 데이터도 클리어
+            self.clear_chart_items(clear_indicators=True) # 지표도 함께 클리어
             self.price_plot.setTitle(f"{self.symbol} ({self.timeframe_combo.currentText()}) - 데이터 없음")
-            self.hide_crosshair() # 데이터 없으면 크로스헤어도 숨김
+            self.hide_crosshair()
             return
 
-        logger.debug(f"{self.symbol} 과거 데이터 수신 ({len(data_df)}개), 차트 업데이트 시작")
-        self.current_data = data_df.copy()
+        logger.debug(f"{self.symbol} 과거 데이터 수신 ({len(data_df)}개), 차트 업데이트 시작 (원본 데이터)")
+        self.current_data = data_df.copy() # 원본 데이터 저장
         
         if 'timestamp' not in self.current_data.columns:
             logger.error("수신된 과거 데이터에 'timestamp' 컬럼이 없습니다.")
@@ -234,21 +241,38 @@ class ChartWidget(QWidget):
                 return
         
         self.current_data = self.current_data.sort_values(by='timestamp')
-        self.redraw_chart()
+        self._redraw_base_chart() # 기본 차트(캔들/라인, 거래량) 먼저 그림
 
+        # current_data_with_ta가 이미 있다면, 그것으로 지표를 다시 그림
+        if self.current_data_with_ta is not None and not self.current_data_with_ta.empty:
+            # 현재 심볼과 시간대가 일치하는지 확인 후 TA 업데이트
+            current_symbol_in_ta = self.current_data_with_ta.attrs.get('symbol')
+            current_timeframe_in_ta = self.current_data_with_ta.attrs.get('timeframe')
+            if current_symbol_in_ta == self.symbol and current_timeframe_in_ta == self.timeframe_combo.currentText():
+                 self.update_technical_indicators_on_chart(self.current_data_with_ta)
+            else: # 일치하지 않으면 TA 데이터도 클리어하고 새로 받아야 함
+                self.current_data_with_ta = None
+                self.clear_indicator_plots()
+
+
+        # X, Y축 범위 설정
         if not self.current_data.empty:
             min_ts = self.current_data['timestamp'].min()
             max_ts = self.current_data['timestamp'].max()
-            self.price_plot.setXRange(min_ts, max_ts, padding=0.02) # X축 범위 먼저 설정
-            self.price_plot.enableAutoRange(axis='y') # Y축은 자동
+            self.price_plot.setXRange(min_ts, max_ts, padding=0.02) 
             self.volume_plot.setXRange(min_ts, max_ts, padding=0.02)
+            # Y축은 지표 추가 후 다시 autoRange 할 수 있음
+            self.price_plot.enableAutoRange(axis='y') 
             self.volume_plot.enableAutoRange(axis='y')
         else:
-            self.price_plot.autoRange() # 데이터 없으면 그냥 autoRange
+            self.price_plot.autoRange()
+            self.volume_plot.autoRange()
 
 
-    def redraw_chart(self):
-        self.clear_chart_items()
+    def _redraw_base_chart(self):
+        """캔들스틱/라인, 거래량 등 기본 차트 항목을 그립니다."""
+        self.clear_chart_items(clear_indicators=False) # 기본 차트 아이템만 클리어, 지표는 유지할 수도 있음 (선택)
+                                                    # 또는 clear_indicators=True로 하고 지표도 다시 그림
         if self.current_data is None or self.current_data.empty:
             self.price_plot.setTitle(f"{self.symbol} ({self.timeframe_combo.currentText()}) - 데이터 없음")
             return
@@ -258,47 +282,130 @@ class ChartWidget(QWidget):
         timeframe_str = self.timeframe_combo.currentText()
 
         # 거래량 바 너비 계산
-        bar_width_factor = 0.7 # 막대가 X축 간격에서 차지하는 비율
+        bar_width_factor = 0.7 
         if len(x_timestamps) > 1:
-            avg_interval = np.mean(np.diff(x_timestamps)) # 데이터 포인트 간 평균 시간 간격 (초 단위)
+            avg_interval = np.mean(np.diff(x_timestamps)) 
             bar_width = avg_interval * bar_width_factor
-        elif len(x_timestamps) == 1: # 데이터 포인트가 하나일 때
-            # 시간대에 따라 기본 너비 설정 (예: 1일봉이면 하루의 70%)
+        elif len(x_timestamps) == 1: 
             if '분' in timeframe_str: bar_width = int(timeframe_str.replace('분','')) * 60 * bar_width_factor
             elif '시간' in timeframe_str: bar_width = int(timeframe_str.replace('시간','')) * 3600 * bar_width_factor
-            elif '일' in timeframe_str: bar_width = (24*3600) * bar_width_factor
-            elif '주' in timeframe_str: bar_width = (7*24*3600) * bar_width_factor
-            elif '월' in timeframe_str: bar_width = (30*24*3600) * bar_width_factor # 대략
-            else: bar_width = (24*3600) * bar_width_factor # 기본값
-        else: # 데이터 없음
-            bar_width = 1 # 의미 없는 값
+            else: bar_width = (24*3600) * bar_width_factor 
+        else: 
+            bar_width = 1 
 
         self.volume_bar_item = pg.BarGraphItem(x=x_timestamps, height=self.current_data['volume'].values, width=bar_width, brush=(80,80,150,180), pen=pg.mkPen(None))
         self.volume_plot.addItem(self.volume_bar_item)
+
 
         if current_chart_type == '라인':
             self.price_line_item = self.price_plot.plot(x_timestamps, self.current_data['close'].values, pen=pg.mkPen('c', width=2), name="종가")
         elif current_chart_type == '캔들스틱':
             candlestick_data_tuples = []
+            # yfinance는 Open, High, Low, Close 컬럼명을 사용하므로, 이전 코드의 ohlc 컬럼명 변환 확인
+            # self.current_data 에 이미 open, high, low, close (소문자) 컬럼이 있다고 가정
             for _idx, row in self.current_data.iterrows():
-                candlestick_data_tuples.append((row['timestamp'], row['open'], row['high'], row['low'], row['close']))
+                if all(col in row and pd.notnull(row[col]) for col in ['timestamp', 'open', 'high', 'low', 'close']):
+                    candlestick_data_tuples.append((row['timestamp'], row['open'], row['high'], row['low'], row['close']))
             
             if candlestick_data_tuples:
                 if self.candlestick_item is None:
-                    self.candlestick_item = CandlestickItem(candlestick_data_tuples)
+                    self.candlestick_item = CandlestickItem(candlestick_data_tuples) # CandlestickItem 정의 필요
                     self.price_plot.addItem(self.candlestick_item)
                 else:
                     self.candlestick_item.setData(candlestick_data_tuples)
         
         self.price_plot.setTitle(f"{self.symbol} - {timeframe_str} ({current_chart_type})")
 
+    def redraw_chart(self): # 사용자가 차트 타입 변경 시 호출
+        self._redraw_base_chart()
+        if self.current_data_with_ta is not None and not self.current_data_with_ta.empty:
+            self.update_technical_indicators_on_chart(self.current_data_with_ta)
+        # X축 범위 재설정
+        if self.current_data is not None and not self.current_data.empty:
+            min_ts = self.current_data['timestamp'].min()
+            max_ts = self.current_data['timestamp'].max()
+            self.price_plot.setXRange(min_ts, max_ts, padding=0.02)
+            self.price_plot.enableAutoRange(axis='y') # Y축은 지표 포함하여 자동 조정
 
-    def clear_chart_items(self):
+
+    def update_technical_indicators_on_chart(self, data_with_indicators: pd.DataFrame):
+        self.current_data_with_ta = data_with_indicators.copy() # TA 데이터 캐싱
+        # ... (이전 답변의 update_technical_indicators_on_chart 로직과 거의 동일)
+        # 각 plot 아이템에 name 인자 확실히 전달 (범례용)
+        if data_with_indicators is None or data_with_indicators.empty or 'timestamp' not in data_with_indicators.columns:
+            logger.warning("차트에 표시할 기술적 지표 데이터가 부적절합니다.")
+            self.clear_indicator_plots() # 기존 지표 플롯 제거
+            return
+
+        logger.debug(f"차트에 기술적 지표 업데이트 시작 (데이터 {len(data_with_indicators)}개)")
+        self.clear_indicator_plots() # 기존 지표 플롯 먼저 제거
+
+        x_timestamps = data_with_indicators['timestamp'].values
+
+        # SMA 플롯
+        sma_cols = [col for col in data_with_indicators.columns if col.startswith('SMA_')]
+        sma_pens = [pg.mkPen(color, width=1) for color in ['#FFA500', '#FFC0CB', '#DA70D6']] # 주황, 핑크, 보라
+        for i, col in enumerate(sma_cols):
+            if col in data_with_indicators and pd.api.types.is_numeric_dtype(data_with_indicators[col]):
+                self.sma_plot_items[col] = self.price_plot.plot(x_timestamps, data_with_indicators[col].values, pen=sma_pens[i % len(sma_pens)], name=col) # name 추가
+                logger.debug(f"{col} 플롯 추가됨")
+
+        # EMA 플롯
+        ema_cols = [col for col in data_with_indicators.columns if col.startswith('EMA_')]
+        ema_pens = [pg.mkPen(color, width=1) for color in ['#ADD8E6', '#90EE90', '#87CEFA']] # 연파랑, 연초록, 하늘색
+        for i, col in enumerate(ema_cols):
+            if col in data_with_indicators and pd.api.types.is_numeric_dtype(data_with_indicators[col]):
+                self.ema_plot_items[col] = self.price_plot.plot(x_timestamps, data_with_indicators[col].values, pen=ema_pens[i % len(ema_pens)], name=col) # name 추가
+                logger.debug(f"{col} 플롯 추가됨")
+
+        # 볼린저 밴드 플롯
+        bb_middle_col = next((col for col in data_with_indicators.columns if col.startswith('BB_Middle_')), None)
+        if bb_middle_col:
+            # window_str = bb_middle_col.split('_')[-1] # 컬럼명에서 window 추출
+            # 더 안전한 방법: BB_Middle_20 -> 20 추출
+            try:
+                window_str = re.search(r'BB_Middle_(\d+)', bb_middle_col).group(1)
+            except AttributeError:
+                logger.warning(f"볼린저 밴드 기간 추출 실패: {bb_middle_col}")
+                window_str = "Default" # 또는 오류 처리
+
+            bb_upper_col = f'BB_Upper_{window_str}'
+            bb_lower_col = f'BB_Lower_{window_str}'
+
+            if all(col in data_with_indicators and pd.api.types.is_numeric_dtype(data_with_indicators[col]) for col in [bb_upper_col, bb_middle_col, bb_lower_col]):
+                pen_bb_middle = pg.mkPen('#A9A9A9', width=1, style=Qt.DotLine) # 중간선: 회색 점선
+                pen_bb_outer = pg.mkPen('#A9A9A9', width=1)      # 상하단선: 회색 실선
+                
+                self.bollinger_plot_items[bb_middle_col] = self.price_plot.plot(x_timestamps, data_with_indicators[bb_middle_col].values, pen=pen_bb_middle, name=bb_middle_col)
+                self.bollinger_plot_items[bb_upper_col] = self.price_plot.plot(x_timestamps, data_with_indicators[bb_upper_col].values, pen=pen_bb_outer, name=bb_upper_col)
+                self.bollinger_plot_items[bb_lower_col] = self.price_plot.plot(x_timestamps, data_with_indicators[bb_lower_col].values, pen=pen_bb_outer, name=bb_lower_col)
+                
+                logger.debug(f"볼린저 밴드 ({window_str}) 플롯 추가됨")
+        
+        # Y축 범위 재조정 (지표 포함)
+        self.price_plot.enableAutoRange(axis='y', enable=True)
+
+
+    def clear_chart_items(self, clear_indicators: bool = True): #
         if self.candlestick_item: self.price_plot.removeItem(self.candlestick_item); self.candlestick_item = None
         if self.price_line_item: self.price_plot.removeItem(self.price_line_item); self.price_line_item = None
         if self.volume_bar_item: self.volume_plot.removeItem(self.volume_bar_item); self.volume_bar_item = None
+        
+        if clear_indicators:
+            self.clear_indicator_plots()
 
-
+    def clear_indicator_plots(self):
+        """차트에서 모든 기술적 지표 플롯 아이템을 제거합니다."""
+        for item_dict in [self.sma_plot_items, self.ema_plot_items, self.bollinger_plot_items]:
+            for key, plot_item in list(item_dict.items()): # list()로 복사하여 반복 중 삭제 오류 방지
+                if plot_item:
+                    try:
+                        self.price_plot.removeItem(plot_item)
+                    except Exception as e:
+                        logger.warning(f"차트에서 {key} 지표 아이템 제거 중 오류: {e}")
+                item_dict[key] = None # 또는 del item_dict[key]
+            item_dict.clear()
+        # logger.debug("모든 기술적 지표 플롯 제거됨")
     def on_mouse_moved_on_price_plot(self, pos_arg_from_signal): # 인자 이름 변경
         """가격 차트 위에서 마우스가 움직일 때 호출됩니다. pos_arg_from_signal은 (QPointF,) 형태의 튜플입니다."""
         if self.current_data is None or self.current_data.empty:
