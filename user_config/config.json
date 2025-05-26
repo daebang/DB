@@ -1,10 +1,6 @@
 {
-    "database": {
-        "host": "localhost",
-        "port": 5432,
-        "database": "stock_trading_db",
-        "username": "trader_user",
-        "password": "your_password"
+	"database": {
+        "host": null
     },
     "api": {
         "alpha_vantage_key": "WAHXX6WWQE28F5SV",

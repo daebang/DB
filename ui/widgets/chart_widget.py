@@ -8,6 +8,7 @@ from PyQt5.QtGui import QPicture, QPainter, QPen, QBrush, QColor, QFont # QFont 
 import pandas as pd
 import numpy as np
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 

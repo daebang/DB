@@ -38,7 +38,6 @@ venv.bak/
 
 # 프로젝트 특정
 config/config.json
-data/
 logs/
 models/
 *.db
