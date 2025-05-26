@@ -10,12 +10,14 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class DatabaseConfig:
-    host: str = "localhost"
+    type: str = "sqlite" # 기본 DB 타입을 sqlite로 명시
+    host: Optional[str] = None # 기본 host를 None으로 설정
     port: int = 5432
-    database: str = "stock_trading_db" # 이름 변경
-    username: str = "trader_user" # 이름 변경
-    password: str = "your_password" # 기본값 설정 (보안 주의)
-
+    database: str = "trading_system_default.db" # SQLite 사용 시 파일명으로 활용 가능
+    username: Optional[str] = None
+    password: Optional[str] = None
+    echo: bool = False
+    
 @dataclass
 class APIConfig:
     alpha_vantage_key: str = ""
