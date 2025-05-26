@@ -1,4 +1,7 @@
+# ui/main_window.py
+
 import sys
+import os # os 모듈 추가
 from PyQt5.QtWidgets import *
 from PyQt5.QtCore import *
 from PyQt5.QtGui import *
@@ -7,295 +10,427 @@ from ui.widgets.chart_widget import ChartWidget
 from ui.widgets.data_widget import DataWidget
 from ui.widgets.trading_widget import TradingWidget
 from ui.dialogs.settings_dialog import SettingsDialog
+import logging # 로깅 추가
+import pandas as pd
+
+logger = logging.getLogger(__name__) # 로거 설정
 
 class MainWindow(QMainWindow):
     """메인 윈도우"""
-    
+
     def __init__(self, controller):
         super().__init__()
         self.controller = controller
         self.setWindowTitle("통합 주식 분석 및 트레이딩 시스템")
-        self.setGeometry(100, 100, 1400, 900)
-        
+        self.setGeometry(100, 100, 1600, 900) # 너비 증가 (필요에 따라 조정)
+
         # 중앙 위젯 설정
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
-        
+
         # UI 구성
         self._create_menu_bar()
         self._create_toolbar()
         self._create_layout()
         self._create_status_bar()
         
+        self._connect_controller_signals() # 컨트롤러 시그널 연결
+
         # 스타일 설정
-        self._set_style()
-        
+        self._set_style() # 스타일 적용 호출
+
         # 타이머 설정 (실시간 업데이트)
         self.update_timer = QTimer()
-        self.update_timer.timeout.connect(self._update_ui)
-        self.update_timer.start(1000)  # 1초마다 업데이트
-    
+        self.update_timer.timeout.connect(self._update_ui_data) # 메서드명 변경 (데이터 업데이트 명시)
+        self.update_timer.start(5000)  # 5초마다 업데이트 (API 호출 빈도 고려)
+
+        logger.info("메인 윈도우 초기화 완료")
+
+        # 초기 데이터 로드 (MainWindow가 완전히 준비된 후 호출되도록 QTimer 사용)
+        # self.show() 이후에 호출되는 것이 더 안정적일 수 있으나,
+        # main.py에서 main_window.show() 이후에 호출하는 것도 방법임.
+        # 여기서는 __init__ 마지막에 QTimer로 지연 호출 시도.
+        QTimer.singleShot(100, self._initial_data_load) # 0.1초 후 _initial_data_load 호출
+        logger.info("_initial_data_load 호출 예약됨.")
+
+
+    def _connect_controller_signals(self):
+        if self.controller:
+            try:
+                self.controller.historical_data_updated_signal.connect(self.handle_historical_data_updated)
+                self.controller.realtime_quote_updated_signal.connect(self.handle_realtime_quote_updated)
+                self.controller.news_data_updated_signal.connect(self.handle_news_updated)
+                self.controller.analysis_result_updated_signal.connect(self.handle_analysis_updated)
+                self.controller.connection_status_changed_signal.connect(self.handle_connection_status_changed)
+                self.controller.status_message_signal.connect(self.handle_status_message)
+                self.controller.task_feedback_signal.connect(self.handle_task_feedback)
+                logger.info("컨트롤러 시그널 연결 완료.")
+            except AttributeError as e:
+                logger.error(f"컨트롤러 시그널 연결 중 AttributeError: {e}. Controller에 해당 시그널이 정의되었는지 확인하세요.")
+            except Exception as e:
+                logger.error(f"컨트롤러 시그널 연결 중 예외 발생: {e}", exc_info=True)
+        else:
+            logger.warning("컨트롤러가 없어 시그널을 연결할 수 없습니다.")
+        
     def _create_menu_bar(self):
-        """메뉴바 생성"""
         menubar = self.menuBar()
-        
-        # 파일 메뉴
-        file_menu = menubar.addMenu('파일')
-        
-        # 설정 불러오기
-        load_action = QAction('설정 불러오기', self)
+        file_menu = menubar.addMenu('파일(&F)')
+        load_action = QAction(QIcon.fromTheme("document-open"), '설정 불러오기(&L)', self)
+        load_action.setShortcut(QKeySequence.Open)
+        load_action.setStatusTip("설정 파일을 불러옵니다.")
         load_action.triggered.connect(self._load_settings)
         file_menu.addAction(load_action)
-        
-        # 설정 저장
-        save_action = QAction('설정 저장', self)
+        save_action = QAction(QIcon.fromTheme("document-save"), '설정 저장(&S)', self)
+        save_action.setShortcut(QKeySequence.Save)
+        save_action.setStatusTip("현재 설정을 파일에 저장합니다.")
         save_action.triggered.connect(self._save_settings)
         file_menu.addAction(save_action)
-        
         file_menu.addSeparator()
-        
-        # 종료
-        exit_action = QAction('종료', self)
+        exit_action = QAction(QIcon.fromTheme("application-exit"), '종료(&X)', self)
         exit_action.setShortcut('Ctrl+Q')
+        exit_action.setStatusTip("애플리케이션을 종료합니다.")
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
-        
-        # 데이터 메뉴
-        data_menu = menubar.addMenu('데이터')
-        
-        refresh_action = QAction('데이터 새로고침', self)
+        data_menu = menubar.addMenu('데이터(&D)')
+        refresh_action = QAction(QIcon.fromTheme("view-refresh"), '데이터 새로고침(&R)', self)
         refresh_action.setShortcut('F5')
+        refresh_action.setStatusTip("최신 데이터로 새로고침합니다.")
         refresh_action.triggered.connect(self._refresh_data)
         data_menu.addAction(refresh_action)
-        
-        # 전략 메뉴
-        strategy_menu = menubar.addMenu('전략')
-        
-        strategy_settings_action = QAction('전략 설정', self)
+        strategy_menu = menubar.addMenu('전략(&T)')
+        strategy_settings_action = QAction('전략 설정...', self)
+        strategy_settings_action.setStatusTip("트레이딩 전략 설정을 엽니다.")
         strategy_settings_action.triggered.connect(self._open_strategy_dialog)
         strategy_menu.addAction(strategy_settings_action)
-        
-        # 도움말 메뉴
-        help_menu = menubar.addMenu('도움말')
-        
-        about_action = QAction('정보', self)
+        help_menu = menubar.addMenu('도움말(&H)')
+        about_action = QAction('정보(&A)', self)
+        about_action.setStatusTip("애플리케이션 정보를 표시합니다.")
         about_action.triggered.connect(self._show_about)
         help_menu.addAction(about_action)
-    
+
     def _create_toolbar(self):
-        """툴바 생성"""
         toolbar = self.addToolBar('메인 툴바')
-        
-        # 시작/중단 버튼
-        self.start_button = QPushButton('시작')
+        toolbar.setMovable(False)
+        toolbar.setIconSize(QSize(24, 24))
+        self.start_button = QPushButton(QIcon.fromTheme("media-playback-start"), '시작')
+        self.start_button.setStatusTip("자동 트레이딩 시스템을 시작합니다.")
         self.start_button.clicked.connect(self._start_trading)
         toolbar.addWidget(self.start_button)
-        
-        self.stop_button = QPushButton('중단')
+        self.stop_button = QPushButton(QIcon.fromTheme("media-playback-stop"), '중단')
+        self.stop_button.setStatusTip("자동 트레이딩 시스템을 중단합니다.")
         self.stop_button.clicked.connect(self._stop_trading)
         self.stop_button.setEnabled(False)
         toolbar.addWidget(self.stop_button)
-        
         toolbar.addSeparator()
-        
-        # 종목 선택
         self.symbol_combo = QComboBox()
         self.symbol_combo.addItems(['AAPL', 'GOOGL', 'MSFT', 'TSLA', 'AMZN'])
+        self.symbol_combo.setStatusTip("분석할 주식 종목을 선택합니다.")
         self.symbol_combo.currentTextChanged.connect(self._on_symbol_changed)
         toolbar.addWidget(QLabel('종목:'))
         toolbar.addWidget(self.symbol_combo)
-        
         toolbar.addSeparator()
-        
-        # 설정 버튼
-        settings_button = QPushButton('설정')
-        settings_button.clicked.connect(self._open_settings)
+        settings_button = QPushButton(QIcon.fromTheme("preferences-system"), '설정')
+        settings_button.setStatusTip("애플리케이션 설정을 엽니다.")
+        settings_button.clicked.connect(self._open_settings_dialog)
         toolbar.addWidget(settings_button)
-    
+
     def _create_layout(self):
-        """레이아웃 생성"""
-        # 메인 스플리터 (세로 분할)
         main_splitter = QSplitter(Qt.Vertical)
-        
-        # 상단 스플리터 (가로 분할)
         top_splitter = QSplitter(Qt.Horizontal)
-        
-        # 차트 위젯
-        self.chart_widget = ChartWidget()
+        self.chart_widget = ChartWidget(self.controller)
         top_splitter.addWidget(self.chart_widget)
-        
-        # 데이터 위젯
-        self.data_widget = DataWidget()
+        self.data_widget = DataWidget(self.controller)
         top_splitter.addWidget(self.data_widget)
-        
-        # 스플리터 비율 설정
-        top_splitter.setSizes([800, 400])
-        
-        # 하단 트레이딩 위젯
+        top_splitter.setStretchFactor(0, 2)
+        top_splitter.setStretchFactor(1, 1)
+        # top_splitter.setSizes([800, 400]) # 크기는 창 크기에 따라 자동 조절되도록 둘 수 있음
         self.trading_widget = TradingWidget()
-        
-        # 메인 스플리터에 추가
         main_splitter.addWidget(top_splitter)
         main_splitter.addWidget(self.trading_widget)
-        main_splitter.setSizes([600, 300])
-        
-        # 중앙 위젯에 레이아웃 설정
+        main_splitter.setStretchFactor(0, 3)
+        main_splitter.setStretchFactor(1, 1)
+        # main_splitter.setSizes([650, 250])
         layout = QVBoxLayout()
         layout.addWidget(main_splitter)
         self.central_widget.setLayout(layout)
-    
+
     def _create_status_bar(self):
-        """상태바 생성"""
         self.status_bar = self.statusBar()
-        
-        # 상태 라벨들
         self.connection_status = QLabel("연결: 대기중")
-        self.data_status = QLabel("데이터: 대기중")
+        self.data_status = QLabel("데이터: 초기화 중...") # 초기 메시지 변경
         self.strategy_status = QLabel("전략: 중단")
-        
         self.status_bar.addPermanentWidget(self.connection_status)
-        self.status_bar.addPermanentWidget(self.data_status)
+        self.status_bar.addPermanentWidget(self.data_status) # 작업 피드백용
         self.status_bar.addPermanentWidget(self.strategy_status)
-        
-        self.status_bar.showMessage("시스템 준비 완료")
-    
+        self.status_bar.showMessage("시스템 준비 완료", 5000)
+
+
     def _set_style(self):
-        """스타일 설정"""
-        self.setStyleSheet("""
-            QMainWindow {
-                background-color: #2b2b2b;
-                color: #ffffff;
-            }
-            QMenuBar {
-                background-color: #3c3c3c;
-                color: #ffffff;
-                border: none;
-            }
-            QMenuBar::item {
-                background-color: transparent;
-                padding: 5px 10px;
-            }
-            QMenuBar::item:selected {
-                background-color: #4CAF50;
-            }
-            QToolBar {
-                background-color: #3c3c3c;
-                border: none;
-                spacing: 5px;
-            }
-            QPushButton {
-                background-color: #4CAF50;
-                color: white;
-                border: none;
-                padding: 8px 16px;
-                border-radius: 4px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #45a049;
-            }
-            QPushButton:disabled {
-                background-color: #666666;
-            }
-            QComboBox {
-                background-color: #4c4c4c;
-                color: white;
-                border: 1px solid #666666;
-                padding: 5px;
-                border-radius: 3px;
-            }
-            QStatusBar {
-                background-color: #3c3c3c;
-                color: #ffffff;
-            }
-        """)
-    
+        try:
+            current_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+            qss_file_path = os.path.join(current_dir, "ui", "styles", "dark_style.qss")
+            if os.path.exists(qss_file_path):
+                with open(qss_file_path, "r", encoding="utf-8") as f:
+                    self.setStyleSheet(f.read())
+                logger.info(f"스타일 시트 로드 성공: {qss_file_path}")
+            else:
+                logger.warning(f"스타일 시트 파일을 찾을 수 없습니다: {qss_file_path}. 기본 스타일이 적용될 수 있습니다.")
+        except Exception as e:
+            logger.error(f"스타일 시트 로드 중 오류 발생: {e}", exc_info=True)
+
     def _start_trading(self):
-        """트레이딩 시작"""
-        self.controller.start()
-        self.start_button.setEnabled(False)
-        self.stop_button.setEnabled(True)
-        self.strategy_status.setText("전략: 실행중")
-        self.status_bar.showMessage("트레이딩 시작됨")
-    
+        if self.controller:
+            self.controller.start()
+            self.start_button.setEnabled(False)
+            self.stop_button.setEnabled(True)
+            self.strategy_status.setText("전략: <font color='green'>실행중</font>")
+            self.status_bar.showMessage("트레이딩 시스템 시작됨", 5000)
+            logger.info("트레이딩 시스템 시작됨")
+        else:
+            QMessageBox.warning(self, "오류", "컨트롤러가 초기화되지 않았습니다.")
+            logger.error("컨트롤러가 없어 트레이딩 시작 불가")
+
     def _stop_trading(self):
-        """트레이딩 중단"""
-        self.controller.stop()
-        self.start_button.setEnabled(True)
-        self.stop_button.setEnabled(False)
-        self.strategy_status.setText("전략: 중단")
-        self.status_bar.showMessage("트레이딩 중단됨")
-    
-    def _on_symbol_changed(self, symbol):
-        """종목 변경"""
-        self.chart_widget.set_symbol(symbol)
-        self.data_widget.set_symbol(symbol)
-        self.trading_widget.set_symbol(symbol)
-    
+        if self.controller:
+            self.controller.stop()
+            self.start_button.setEnabled(True)
+            self.stop_button.setEnabled(False)
+            self.strategy_status.setText("전략: <font color='orange'>중단</font>")
+            self.status_bar.showMessage("트레이딩 시스템 중단됨", 5000)
+            logger.info("트레이딩 시스템 중단됨")
+        else:
+            logger.error("컨트롤러가 없어 트레이딩 중단 불가")
+
+    def _on_symbol_changed(self, symbol: str):
+        logger.info(f"선택된 종목 변경: {symbol}")
+        if hasattr(self.chart_widget, 'set_symbol'):
+            self.chart_widget.set_symbol(symbol) # 여기서 데이터 요청 트리거됨
+        if hasattr(self.data_widget, 'set_symbol'):
+            self.data_widget.set_symbol(symbol) # 여기서도 UI 초기화 및 필요시 데이터 요청
+        if hasattr(self.trading_widget, 'set_symbol'):
+            self.trading_widget.set_symbol(symbol)
+        # self._refresh_data() # set_symbol 내에서 on_timeframe_or_symbol_changed가 호출되므로 중복일 수 있음
+
     def _refresh_data(self):
-        """데이터 새로고침"""
         current_symbol = self.symbol_combo.currentText()
-        self.data_status.setText("데이터: 업데이트중...")
-        # 실제 데이터 새로고침 로직
-        QTimer.singleShot(2000, lambda: self.data_status.setText("데이터: 최신"))
-    
-    def _update_ui(self):
-        """UI 실시간 업데이트"""
-        # 실시간 데이터 업데이트
-        current_symbol = self.symbol_combo.currentText()
-        if hasattr(self.controller, 'get_realtime_data'):
-            data = self.controller.get_realtime_data(current_symbol)
-            if data:
-                self.chart_widget.update_data(data)
-                self.data_widget.update_data(data)
-    
+        current_timeframe = self.chart_widget.timeframe_combo.currentText() if self.chart_widget else '1일'
+
+        logger.info(f"'{current_symbol}' ({current_timeframe}) 데이터 수동 새로고침 요청") # logger 사용
+
+        if self.chart_widget:
+            self.chart_widget.price_plot.setTitle(f"{current_symbol} ({current_timeframe}) - 데이터 새로고침 중...")
+            self.chart_widget.clear_chart_items()
+        if self.data_widget:
+            self.data_widget.clear_all_tabs_data() # 데이터 위젯도 초기화
+
+        if self.controller:
+            if hasattr(self.controller, 'request_historical_data'):
+                self.controller.request_historical_data(current_symbol, current_timeframe)
+            if hasattr(self.controller, 'request_realtime_quote'):
+                self.controller.request_realtime_quote(current_symbol)
+            if hasattr(self.controller, 'request_news_data'):
+                self.controller.request_news_data(f"{current_symbol} stock OR {current_symbol} news")
+        else:
+            logger.warning("컨트롤러가 없어 데이터 새로고침 불가")
+            if hasattr(self, 'data_status'): self.data_status.setText(f"데이터 ({current_symbol}): <font color='red'>컨트롤러 없음</font>")
+
+    def _update_ui_data(self):
+        """UI 실시간 데이터 업데이트 (컨트롤러로부터 데이터 가져오기)"""
+        # 이 메서드는 주기적으로 controller에게 데이터 업데이트를 요청하거나,
+        # controller가 이벤트를 통해 데이터를 푸시하면 여기서 받아서 각 위젯에 전달할 수 있습니다.
+        # 현재는 _refresh_data가 데이터 요청을 트리거하고,
+        # controller는 EventManager를 통해 'data_updated_for_ui' 같은 이벤트를 발행하여
+        # MainWindow가 구독하고 있다가 위젯에 전달하는 방식이 더 효율적일 수 있습니다.
+        # 지금은 간단히 주기적으로 새로고침을 호출하는 형태로 두겠습니다.
+        # self._refresh_data() # 너무 잦은 호출은 API 제한을 유발할 수 있음
+
+        # 대신 controller가 데이터를 가지고 있고, UI가 이를 polling 하는 방식
+        if self.controller:
+            current_symbol = self.symbol_combo.currentText()
+            # 실시간 호가 업데이트
+            realtime_data = self.controller.get_cached_realtime_data(current_symbol)
+            if realtime_data and self.data_widget:
+                 self.data_widget.update_realtime_quote_display(realtime_data) # DataWidget에 실시간 호가 업데이트 메서드 필요
+
+            # 포지션 업데이트 (예시)
+            # positions = self.controller.get_portfolio_positions()
+            # if positions and self.trading_widget:
+            #     self.trading_widget.update_positions_display(positions)
+
+
     def _load_settings(self):
-        """설정 불러오기"""
+        if not self.controller or not hasattr(self.controller, 'settings'):
+            QMessageBox.warning(self, "오류", "설정 관리자가 준비되지 않았습니다.")
+            return
         filename, _ = QFileDialog.getOpenFileName(
-            self, "설정 파일 열기", "", "JSON Files (*.json)"
+            self, "설정 파일 열기", self.controller.settings.get_config_directory(), "JSON Files (*.json)"
         )
         if filename:
-            self.controller.settings.config_file = filename
-            self.controller.settings.load_config()
-            self.status_bar.showMessage("설정 불러오기 완료")
-    
+            if self.controller.settings.load_config(filename):
+                self.status_bar.showMessage("설정 불러오기 완료", 5000)
+                QMessageBox.information(self, "성공", "설정을 성공적으로 불러왔습니다.")
+                logger.info(f"설정 파일 로드: {filename}")
+                if hasattr(self.controller, 'apply_updated_settings'):
+                    self.controller.apply_updated_settings() # 로드 후 설정 적용
+            else:
+                QMessageBox.critical(self, "오류", "설정 파일 로드에 실패했습니다.")
+                logger.error(f"설정 파일 로드 실패: {filename}")
+
     def _save_settings(self):
-        """설정 저장"""
+        if not self.controller or not hasattr(self.controller, 'settings'):
+            QMessageBox.warning(self, "오류", "설정 관리자가 준비되지 않았습니다.")
+            return
         filename, _ = QFileDialog.getSaveFileName(
-            self, "설정 파일 저장", "", "JSON Files (*.json)"
+            self, "설정 파일 저장", self.controller.settings.get_config_directory(), "JSON Files (*.json)"
         )
         if filename:
-            self.controller.settings.config_file = filename
-            self.controller.settings.save_config()
-            self.status_bar.showMessage("설정 저장 완료")
-    
-    def _open_settings(self):
-        """설정 대화상자 열기"""
+            if not filename.endswith(".json"): filename += ".json"
+            if self.controller.settings.save_config(filename):
+                self.status_bar.showMessage("설정 저장 완료", 5000)
+                QMessageBox.information(self, "성공", "설정을 성공적으로 저장했습니다.")
+                logger.info(f"설정 파일 저장: {filename}")
+            else:
+                QMessageBox.critical(self, "오류", "설정 파일 저장에 실패했습니다.")
+                logger.error(f"설정 파일 저장 실패: {filename}")
+
+    def _open_settings_dialog(self):
+        if not self.controller or not hasattr(self.controller, 'settings'):
+            QMessageBox.warning(self, "오류", "설정 관리자가 준비되지 않았습니다.")
+            logger.error("설정 대화상자 열기 실패: 컨트롤러 또는 설정 객체 없음")
+            return
         dialog = SettingsDialog(self.controller.settings, self)
-        if dialog.exec_() == QDialog.Accepted:
-            self.status_bar.showMessage("설정 업데이트 완료")
-    
+        if dialog.exec_() == QDialog.Accepted: # Dialog.Accepted (QDialog 임포트 확인)
+            self.status_bar.showMessage("설정 업데이트 완료 (저장됨)", 5000)
+            logger.info("설정 업데이트 완료 (저장됨)")
+            if hasattr(self.controller, 'apply_updated_settings'):
+                self.controller.apply_updated_settings()
+                
     def _open_strategy_dialog(self):
-        """전략 설정 대화상자 열기"""
-        pass  # 구현 예정
-    
+        """전략 설정 대화상자 열기 (구현 예정)"""
+        # TODO: 전략 설정 관련 다이얼로그 (예: ML전략 파라미터, 기술적 분석 조건 등)
+        QMessageBox.information(self, "알림", "전략 설정 기능은 현재 개발 중입니다.")
+        logger.info("전략 설정 대화상자 요청 (미구현)")
+
+
     def _show_about(self):
         """정보 대화상자 표시"""
-        QMessageBox.about(self, "정보", 
-            "통합 주식 분석 및 트레이딩 시스템\n"
-            "버전 1.0\n\n"
-            "머신러닝과 기술적 분석을 결합한\n"
-            "자동 트레이딩 시스템입니다.")
-    
-    def closeEvent(self, event):
+        QMessageBox.about(self, "정보",
+            "<b>통합 주식 분석 및 트레이딩 시스템</b><br>"
+            "버전 0.1.0 (Alpha)<br><br>"
+            "본 시스템은 PyQt5와 다양한 데이터 분석 라이브러리를 활용하여<br>"
+            "주식 분석 및 자동 트레이딩 환경을 제공하는 것을 목표로 합니다.<br><br>"
+            "<b>주의:</b> 교육 및 연구 목적으로 개발되었으며, 실제 투자 결정은 신중히 하시기 바랍니다."
+        )
+
+    def closeEvent(self, event: QCloseEvent): # 타입 힌트 추가
         """종료 이벤트 처리"""
-        reply = QMessageBox.question(self, '종료 확인', 
+        reply = QMessageBox.question(self, '종료 확인',
             '정말로 프로그램을 종료하시겠습니까?',
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No)
-        
+
         if reply == QMessageBox.Yes:
-            self.controller.stop()
+            logger.info("애플리케이션 종료 시작")
+            if self.controller:
+                self.controller.stop() # 컨트롤러의 정리 작업 수행
             event.accept()
         else:
+            logger.info("애플리케이션 종료 취소")
             event.ignore()
+
+    # --- Controller로부터 데이터를 받아 UI를 업데이트하는 슬롯 함수들 ---
+    def handle_historical_data_updated(self, symbol: str, data_df_object: object):
+        logger.info(f"시그널 수신: MainWindow.handle_historical_data_updated (심볼: {symbol}, 데이터 타입: {type(data_df_object)})")
+        if not isinstance(data_df_object, pd.DataFrame):
+            logger.error(f"잘못된 과거 데이터 타입 수신: {type(data_df_object)}")
+            if self.chart_widget and hasattr(self.chart_widget, 'price_plot') and symbol == self.symbol_combo.currentText():
+                 self.chart_widget.price_plot.setTitle(f"{symbol} ({self.chart_widget.timeframe_combo.currentText()}) - 데이터 타입 오류")
+            self.handle_task_feedback(f"{symbol} 과거 데이터", "UI 업데이트 실패 (타입 오류)")
+            return
+
+        data_df = data_df_object
+        if symbol == self.symbol_combo.currentText():
+            if self.chart_widget:
+                logger.debug(f"{symbol} 과거 데이터 ({len(data_df)} 행) ChartWidget으로 전달.")
+                self.chart_widget.update_historical_data(data_df.copy())
+            
+            if data_df.empty:
+                self.handle_task_feedback(f"{symbol} 과거 데이터", "데이터 없음 (UI)")
+            else:
+                self.handle_task_feedback(f"{symbol} 과거 데이터", "차트 업데이트됨 (UI)")
+        else:
+            logger.debug(f"수신된 과거 데이터 ({symbol})가 현재 선택된 심볼({self.symbol_combo.currentText()})과 달라 UI 업데이트 건너뜀.")
+
+    def handle_realtime_quote_updated(self, symbol: str, quote_data: dict):
+        logger.info(f"시그널 수신: MainWindow.handle_realtime_quote_updated (심볼: {symbol})")
+        if symbol == self.symbol_combo.currentText() and self.data_widget:
+            self.data_widget.update_realtime_quote_display(quote_data)
+            logger.debug(f"{symbol} 실시간 호가 UI 업데이트됨: {quote_data.get('price')}")
+        # 실시간 호가는 상태바의 data_status를 직접 업데이트하지 않고, DataWidget 내부에서만 표시
+
+    def handle_news_updated(self, symbol_or_keywords: str, news_list: list):
+        logger.info(f"시그널 수신: MainWindow.handle_news_updated (키워드: {symbol_or_keywords}, 뉴스 {len(news_list)}개)")
+        # 현재 선택된 심볼과 뉴스 키워드가 연관있는지 확인하는 로직 필요 (선택적)
+        # 예를 들어, self.symbol_combo.currentText()가 symbol_or_keywords에 포함되는지 등
+        current_symbol = self.symbol_combo.currentText()
+        if current_symbol in symbol_or_keywords and self.data_widget: # 단순 포함 관계 확인
+            self.data_widget.update_news_display(news_list)
+            logger.debug(f"'{symbol_or_keywords}' 관련 뉴스 DataWidget에 업데이트됨.")
+
+    def handle_analysis_updated(self, symbol: str, analysis_results: dict):
+        logger.info(f"시그널 수신: MainWindow.handle_analysis_updated (심볼: {symbol})")
+        if symbol == self.symbol_combo.currentText() and self.data_widget:
+            self.data_widget.update_analysis_display(analysis_results)
+            logger.debug(f"{symbol} 분석 결과 DataWidget에 업데이트됨.")
+
+    def handle_connection_status_changed(self, status_message: str, is_connected: bool):
+        logger.info(f"시그널 수신: MainWindow.handle_connection_status_changed ({status_message}, 연결됨: {is_connected})")
+        color = "lightgreen" if is_connected else "red"
+        if hasattr(self, 'connection_status'):
+            self.connection_status.setText(f"연결: <font color='{color}'>{status_message}</font>")
+
+    def handle_task_feedback(self, task_name: str, status: str):
+        logger.info(f"시그널 수신: MainWindow.handle_task_feedback ('{task_name}': {status})")
+        if hasattr(self, 'data_status') and self.data_status:
+            feedback_message = f"{task_name}: {status}"
+            self.data_status.setText(feedback_message)
+            # logger.info(f"작업 피드백 UI 업데이트: {feedback_message}") # 너무 빈번할 수 있어 debug로 변경 또는 제거
+
+            if "실패" in status or "오류" in status:
+                self.data_status.setStyleSheet("QLabel { color : #F44336; }") # 빨간색
+            elif "완료" in status or "로드 완료" in status:
+                self.data_status.setStyleSheet("QLabel { color : #4CAF50; }") # 초록색
+            else: # "요청 시작", "진행 중", "API 호출 중" 등
+                self.data_status.setStyleSheet("QLabel { color : #FFEB3B; }") # 노란색
+        else:
+            logger.warning(f"data_status 라벨이 없어 작업 피드백 표시 불가: {task_name} - {status}")
+
+    def _initial_data_load(self):
+        current_symbol = self.symbol_combo.currentText()
+        if hasattr(self, 'chart_widget') and self.chart_widget:
+            current_timeframe = self.chart_widget.timeframe_combo.currentText()
+        else:
+            current_timeframe = '1일'
+            logger.warning("ChartWidget이 아직 준비되지 않아 기본 시간대('1일')를 사용합니다.")
+
+        if self.controller:
+            logger.info(f"초기 데이터 로드 시작: 심볼={current_symbol}, 시간대={current_timeframe}")
+            if hasattr(self, 'data_status') and self.data_status:
+                 self.data_status.setText(f"데이터 ({current_symbol}): <font color='yellow'>초기 로딩 중...</font>")
+            if hasattr(self, 'chart_widget') and self.chart_widget and hasattr(self.chart_widget, 'price_plot'):
+                 self.chart_widget.price_plot.setTitle(f"{current_symbol} ({current_timeframe}) - 데이터 로딩 중...")
+                 self.chart_widget.clear_chart_items()
+
+            if hasattr(self.controller, 'request_historical_data'):
+                self.controller.request_historical_data(current_symbol, current_timeframe)
+            else:
+                logger.error("컨트롤러에 'request_historical_data' 메서드가 없습니다.")
+            
+            if hasattr(self.controller, 'request_realtime_quote'):
+                self.controller.request_realtime_quote(current_symbol)
+            if hasattr(self.controller, 'request_news_data'):
+                 self.controller.request_news_data(f"{current_symbol} stock OR {current_symbol} news") # 뉴스 검색어 예시
+        else:
+            logger.error("컨트롤러가 없어 초기 데이터 로드를 수행할 수 없습니다.")
+            if hasattr(self, 'data_status') and self.data_status:
+                self.data_status.setText(f"데이터 ({current_symbol}): <font color='red'>컨트롤러 오류</font>")

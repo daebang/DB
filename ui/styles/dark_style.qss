@@ -1,0 +1,271 @@
+QMainWindow {
+    background-color: #2E2E2E; /* 어두운 배경 */
+    color: #E0E0E0; /* 밝은 글자색 */
+}
+
+QMenuBar {
+    background-color: #383838;
+    color: #E0E0E0;
+    border-bottom: 1px solid #505050;
+}
+QMenuBar::item {
+    background-color: transparent;
+    padding: 5px 10px;
+    margin-left: 2px;
+}
+QMenuBar::item:selected {
+    background-color: #505050;
+    border-radius: 3px;
+}
+QMenuBar::item:pressed {
+    background-color: #606060;
+}
+
+QMenu {
+    background-color: #383838;
+    color: #E0E0E0;
+    border: 1px solid #505050;
+    padding: 2px;
+}
+QMenu::item {
+    padding: 5px 20px 5px 20px;
+}
+QMenu::item:selected {
+    background-color: #505050;
+    border-radius: 3px;
+}
+QMenu::separator {
+    height: 1px;
+    background-color: #505050;
+    margin: 4px 0px;
+}
+
+QToolBar {
+    background-color: #383838;
+    border: none;
+    padding: 2px;
+    spacing: 3px;
+}
+QToolBar QLabel {
+    color: #E0E0E0;
+    padding-left: 3px;
+    padding-right: 3px;
+}
+
+QPushButton {
+    background-color: #505050;
+    color: #E0E0E0;
+    border: 1px solid #606060;
+    padding: 6px 12px;
+    border-radius: 4px;
+    min-width: 60px; /* 버튼 최소 너비 */
+}
+QPushButton:hover {
+    background-color: #606060;
+    border: 1px solid #707070;
+}
+QPushButton:pressed {
+    background-color: #454545;
+}
+QPushButton:disabled {
+    background-color: #404040;
+    color: #707070;
+    border: 1px solid #505050;
+}
+QPushButton:checked { /* 토글 버튼 등 */
+    background-color: #007ACC; /* 선택 시 색상 */
+    border: 1px solid #005C99;
+}
+
+
+QComboBox {
+    background-color: #454545;
+    color: #E0E0E0;
+    border: 1px solid #606060;
+    padding: 5px;
+    border-radius: 3px;
+    min-width: 80px;
+}
+QComboBox:hover {
+    border: 1px solid #707070;
+}
+QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 20px;
+    border-left-width: 1px;
+    border-left-color: #606060;
+    border-left-style: solid;
+    border-top-right-radius: 3px;
+    border-bottom-right-radius: 3px;
+}
+QComboBox::down-arrow {    
+    /* 대체: image: url(path/to/your/custom_arrow.png); */
+}
+QComboBox QAbstractItemView { /* 드롭다운 리스트 스타일 */
+    background-color: #383838;
+    color: #E0E0E0;
+    border: 1px solid #505050;
+    selection-background-color: #505050;
+    padding: 2px;
+}
+
+QGroupBox {
+    background-color: #3C3C3C;
+    border: 1px solid #505050;
+    border-radius: 4px;
+    margin-top: 10px; /* 제목 공간 확보 */
+    padding: 10px;
+    color: #E0E0E0;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    padding: 0 5px 0 5px;
+    left: 10px; /* QGroupBox 테두리 안쪽으로 제목 위치 조정 */
+    color: #E8E8E8;
+    font-weight: bold;
+}
+
+QLabel {
+    color: #E0E0E0;
+    background-color: transparent; /* 기본 배경 투명 */
+}
+
+QLineEdit, QSpinBox, QDoubleSpinBox {
+    background-color: #454545;
+    color: #E0E0E0;
+    border: 1px solid #606060;
+    padding: 5px;
+    border-radius: 3px;
+}
+QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {
+    border: 1px solid #007ACC; /* 포커스 시 테두리 색상 */
+}
+
+QTableWidget {
+    background-color: #3C3C3C;
+    color: #E0E0E0;
+    border: 1px solid #505050;
+    gridline-color: #505050; /* 그리드 라인 색상 */
+    selection-background-color: #505050; /* 선택 배경색 */
+    selection-color: #E0E0E0; /* 선택 글자색 */
+}
+QHeaderView::section { /* 테이블 헤더 */
+    background-color: #454545;
+    color: #E0E0E0;
+    padding: 4px;
+    border: 1px solid #505050;
+    font-weight: bold;
+}
+
+QTabWidget::pane {
+    border: 1px solid #505050;
+    border-top: none; /* 탭 아래쪽에만 테두리 */
+    background-color: #3C3C3C;
+}
+QTabBar::tab {
+    background-color: #454545;
+    color: #C0C0C0; /* 비활성 탭 글자색 */
+    border: 1px solid #505050;
+    border-bottom: none; /* 선택된 탭이 아닐 때 아래쪽 테두리 없음 */
+    border-top-left-radius: 4px;
+    border-top-right-radius: 4px;
+    padding: 8px 15px;
+    margin-right: 2px;
+}
+QTabBar::tab:selected {
+    background-color: #3C3C3C; /* 선택된 탭 배경은 pane과 동일하게 */
+    color: #E0E0E0; /* 활성 탭 글자색 */
+    border-bottom: 1px solid #3C3C3C; /* 선택된 탭의 아래 테두리를 배경색과 같게 하여 연결된 것처럼 보이게 */
+}
+QTabBar::tab:hover {
+    background-color: #505050;
+}
+
+
+QSplitter::handle {
+    background-color: #505050;
+    /* image: url(path/to/your/splitter_handle.png); 사용 가능 */
+}
+QSplitter::handle:horizontal {
+    width: 1px; /* 수평 스플리터 핸들 두께 */
+    margin: 0px 2px;
+}
+QSplitter::handle:vertical {
+    height: 1px; /* 수직 스플리터 핸들 두께 */
+    margin: 2px 0px;
+}
+
+
+QStatusBar {
+    background-color: #383838;
+    color: #E0E0E0;
+    border-top: 1px solid #505050;
+}
+QStatusBar::item {
+    border: none; /* 상태바 아이템 간 구분선 제거 */
+    margin: 0px 2px;
+}
+
+QMessageBox {
+    background-color: #3C3C3C;
+}
+QMessageBox QLabel { /* 메시지 박스 내 라벨 */
+    color: #E0E0E0;
+}
+QMessageBox QPushButton { /* 메시지 박스 내 버튼 */
+    min-width: 80px;
+    padding: 6px 12px;
+}
+
+QScrollBar:horizontal {
+    border: 1px solid #505050;
+    background: #383838;
+    height: 12px;
+    margin: 0px 15px 0 15px;
+}
+QScrollBar::handle:horizontal {
+    background: #606060;
+    min-width: 20px;
+    border-radius: 5px;
+}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+    border: none;
+    background: none;
+    width: 15px;
+    subcontrol-origin: margin;
+}
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+    background: none;
+}
+
+QScrollBar:vertical {
+    border: 1px solid #505050;
+    background: #383838;
+    width: 12px;
+    margin: 15px 0 15px 0;
+}
+QScrollBar::handle:vertical {
+    background: #606060;
+    min-height: 20px;
+    border-radius: 5px;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    border: none;
+    background: none;
+    height: 15px;
+    subcontrol-origin: margin;
+}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+    background: none;
+}
+
+/* pyqtgraph 차트 영역은 내부적으로 스타일링 될 수 있으므로,
+   GraphicsLayoutWidget의 배경 등을 여기서 설정할 수 있습니다. */
+GraphicsLayoutWidget {
+    background-color: #202020; /* 차트 배경색 */
+}
+PlotItem { /* PlotItem 자체의 배경은 pyqtgraph에서 설정 */
+    /* background-color: #252525; */ /* 작동 안할 수 있음 */
+}

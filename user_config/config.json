@@ -1,0 +1,26 @@
+{
+    "database": {
+        "host": "localhost",
+        "port": 5432,
+        "database": "stock_trading_db",
+        "username": "trader_user",
+        "password": "your_password"
+    },
+    "api": {
+        "alpha_vantage_key": "WAHXX6WWQE28F5SV",
+        "news_api_key": "b960d3db82d64857b691bfd175916df7",
+        "broker_api_key": "",
+        "broker_secret": ""
+    },
+    "trading": {
+        "max_position_size_percent": 0.1,
+        "stop_loss_percent": 0.05,
+        "take_profit_percent": 0.15,
+        "risk_free_rate": 0.02,
+        "default_order_quantity": 1
+    },
+    "application": {
+        "log_level": "INFO",
+        "default_theme": "dark"
+    }
+}
