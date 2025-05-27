@@ -57,7 +57,12 @@ class MainController(QObject):
         self.logger = logging.getLogger(__name__)
 
         self.event_manager = EventManager()
-        self.workflow_engine = WorkflowEngine(self.event_manager, num_workers=5)
+        self.workflow_engine = WorkflowEngine(
+            self.event_manager,
+            num_workers=None,  # 자동 설정
+            min_workers=2,     # 최소 2개
+            max_workers=10     # 최대 10개
+        )
         self.scheduler = Scheduler()
 
         try:
@@ -538,17 +543,36 @@ class MainController(QObject):
     # --- Cached Data Getters ---
 
 
-    def get_cached_historical_data(self, symbol: str, timeframe: str, with_ta: bool = False) -> Optional[pd.DataFrame]:
+    def get_cached_historical_data(self, symbol: str, timeframe: str, with_ta: bool = False, copy: bool = True) -> Optional[pd.DataFrame]:
+        """
+        캐시된 과거 데이터 반환
+        
+        Args:
+            symbol: 주식 심볼
+            timeframe: 시간 프레임
+            with_ta: 기술적 지표 포함 여부
+            copy: DataFrame 복사본 반환 여부 (False면 원본 참조 반환)
+        """
         with self._cache_lock:
             key = f"{symbol}_{timeframe}_historical_ta" if with_ta else f"{symbol}_{timeframe}_historical"
             data = self._data_cache.get(key)
-            return data.copy() if data is not None else None # 복사본 반환
+            if data is None:
+                return None
+            return data.copy() if copy else data
 
-    def get_cached_economic_calendar_data(self) -> Optional[pd.DataFrame]:
+    def get_cached_economic_calendar_data(self, copy: bool = True) -> Optional[pd.DataFrame]:
+        """
+        캐시된 경제 캘린더 데이터 반환
+        
+        Args:
+            copy: DataFrame 복사본 반환 여부 (False면 원본 참조 반환)
+        """
         with self._cache_lock:
             data = self._data_cache.get("economic_calendar")
-            return data.copy() if data is not None else None
-
+            if data is None:
+                return None
+            return data.copy() if copy else data
+        
     def get_cached_news_data(self, cache_key: str) -> Optional[List[Dict]]:
         with self._cache_lock:
             # 뉴스 데이터는 리스트이므로, 내부 딕셔너리까지 깊은 복사 고려 (현재는 얕은 복사)
@@ -559,14 +583,12 @@ class MainController(QObject):
         task_display_name = f"{symbol}({timeframe}) AI 분석" # 이름 구체화
         self.task_feedback_signal.emit(task_display_name, "요청 시작")
 
-        if data_df is None: # 분석용 데이터가 전달되지 않았다면 캐시에서 로드 시도
-            with self._cache_lock:
-                # 기술적 지표가 포함된 데이터를 우선적으로 찾음
-                data_df = self._data_cache.get(f"{symbol}_{timeframe}_historical_ta")
-            if data_df is None: # 지표 포함 데이터가 없으면 원본이라도 찾음 (이 경우 분석 모델이 내부적으로 지표 계산해야 함)
-                 with self._cache_lock:
-                    data_df = self._data_cache.get(f"{symbol}_{timeframe}_historical")
-        
+        if data_df is None:
+            # 분석용 데이터는 읽기 전용이므로 복사하지 않음
+            data_df = self.get_cached_historical_data(symbol, timeframe, with_ta=True, copy=False)
+            if data_df is None:
+                data_df = self.get_cached_historical_data(symbol, timeframe, with_ta=False, copy=False)
+            
         if data_df is None or data_df.empty:
             msg = f"{task_display_name} 실패: AI 분석용 데이터 없음."
             self.status_message_signal.emit(msg, 5000)

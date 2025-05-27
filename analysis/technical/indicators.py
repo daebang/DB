@@ -51,23 +51,41 @@ def add_rsi(df: pd.DataFrame, window: int = 14, price_col: str = 'close', output
     
     loss = delta.copy()
     loss[loss > 0] = 0.0
-    loss = abs(loss) # Make losses positive
+    loss = abs(loss)
 
-    # Calculate Wilder's moving average for gain and loss
-    avg_gain = gain.ewm(com=window - 1, min_periods=window, adjust=False).mean()
-    avg_loss = loss.ewm(com=window - 1, min_periods=window, adjust=False).mean()
-
+    # 첫 번째 평균은 단순 이동 평균으로 계산 (Wilder's method)
+    first_avg_gain = gain[:window].mean()
+    first_avg_loss = loss[:window].mean()
+    
+    # Wilder's smoothing을 위한 초기값 설정
+    avg_gain = gain.copy()
+    avg_loss = loss.copy()
+    
+    avg_gain.iloc[window-1] = first_avg_gain
+    avg_loss.iloc[window-1] = first_avg_loss
+    
+    # Wilder's smoothing 적용
+    for i in range(window, len(df)):
+        avg_gain.iloc[i] = (avg_gain.iloc[i-1] * (window - 1) + gain.iloc[i]) / window
+        avg_loss.iloc[i] = (avg_loss.iloc[i-1] * (window - 1) + loss.iloc[i]) / window
+    
+    # 첫 window-1 개는 NaN으로 설정
+    avg_gain[:window-1] = np.nan
+    avg_loss[:window-1] = np.nan
+    
+    # RSI 계산
     rs = avg_gain / avg_loss
     rsi = 100.0 - (100.0 / (1.0 + rs))
     
-    # 첫 window-1 기간 동안은 NaN이 나올 수 있음, 이후 기간은 정상 계산
-    # 첫 RSI 값은 단순 평균으로 계산할 수도 있으나, 보통 ewm의 min_periods로 처리
+    # 0으로 나누기 처리
+    rsi[avg_loss == 0] = 100
+    
     df[output_col_name] = rsi
-    df[output_col_name] = df[output_col_name].fillna(0) # 초기 NaN 값을 0으로 채우거나 다른 값으로 처리 (예: 50)
+    df[output_col_name] = df[output_col_name].fillna(50)  # 초기 NaN 값을 중립값 50으로
 
     logger.debug(f"'{output_col_name}' 컬럼 추가됨 (window: {window})")
     return df
-
+    
 # --- MACD ---
 def add_macd(df: pd.DataFrame, short_window: int = 12, long_window: int = 26, signal_window: int = 9, price_col: str = 'close') -> pd.DataFrame:
     """DataFrame에 MACD 관련 컬럼들(MACD, Signal, Histogram)을 추가합니다."""
