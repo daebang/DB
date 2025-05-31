@@ -222,25 +222,25 @@ class MainWindow(QMainWindow):
 
     def _on_symbol_changed(self, symbol: str):
         logger.info(f"선택된 종목 변경: {symbol}")
+        if self.controller: # 컨트롤러에 현재 심볼 알려주기
+            self.controller.set_current_symbol(symbol)
+
         if hasattr(self.chart_widget, 'set_symbol'):
-            self.chart_widget.set_symbol(symbol) # 여기서 데이터 요청 트리거됨
+            self.chart_widget.set_symbol(symbol)
         if hasattr(self.data_widget, 'set_symbol'):
-            self.data_widget.set_symbol(symbol) # 여기서도 UI 초기화 및 필요시 데이터 요청
+            self.data_widget.set_symbol(symbol)
         if hasattr(self.trading_widget, 'set_symbol'):
             self.trading_widget.set_symbol(symbol)
         
-        # 심볼 변경 시 _initial_data_load 또는 _refresh_data와 유사한 로직으로 새 데이터 요청
-        # ChartWidget의 set_symbol 내부에서 on_timeframe_or_symbol_changed가 호출되어 데이터 요청을 시작함.
-        # DataWidget도 set_symbol에서 필요한 초기화를 하고, controller를 통해 데이터를 요청해야 함.
-        # 여기서는 ChartWidget의 set_symbol이 주 데이터 요청을 트리거한다고 가정.
-        # 필요하다면 MainWindow에서 직접 Controller의 데이터 요청 함수들을 호출.
         current_timeframe = self.chart_widget.timeframe_combo.currentText() if self.chart_widget else '1일'
         if self.controller:
+            # 과거 데이터 요청이 가장 먼저 시작되어야 TA 계산 및 분석으로 이어짐
+            self.controller.request_historical_data(symbol, current_timeframe, force_fetch_from_api=False) # force_fetch_from_api는 필요에 따라 조정
+            # 나머지 데이터 요청은 비동기적으로 진행
             self.controller.request_realtime_quote(symbol)
-            self.controller.request_news_data(f"{symbol} stock OR {symbol} news")
-            # self.controller.request_economic_calendar_update() # 경제 지표는 심볼 변경과 무관할 수 있음. 필요시.
-            # 분석 요청은 historical data 업데이트 후 자동으로 이루어지도록 Controller에 설계됨.
-
+            self.controller.request_news_data(f"{symbol} stock news OR {symbol}", force_fetch_from_api=False) # 심볼 변경 시 뉴스는 강제 업데이트 안 함 (선택)
+            # 경제 캘린더는 심볼 변경과 무관하게 주기적으로 업데이트되므로 여기서 호출 안 함
+            
     def _refresh_data(self):
         current_symbol = self.symbol_combo.currentText()
         current_timeframe = self.chart_widget.timeframe_combo.currentText() if self.chart_widget else '1일'

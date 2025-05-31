@@ -1,7 +1,7 @@
 # data/database_manager.py
 import os
 import pandas as pd
-from sqlalchemy import create_engine, and_, desc, asc, inspect, or_, func, Integer
+from sqlalchemy import create_engine, and_, desc, asc, inspect, or_, func, Integer, Float
 from sqlalchemy.orm import sessionmaker, scoped_session
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from contextlib import contextmanager
