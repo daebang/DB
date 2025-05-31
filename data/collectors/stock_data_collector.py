@@ -3,9 +3,13 @@ import logging
 import pandas as pd
 import numpy as np
 import yfinance as yf
-from typing import Optional, Dict, List, Any # Any 추가
+from typing import Optional, Dict, List, Any
+import time # time 모듈 추가
 
 logger = logging.getLogger(__name__)
+
+# API 요청 간 최소 대기 시간 (초)
+YFINANCE_REQUEST_DELAY = 90 # 예시로 1초, 실제로는 더 길게 필요할 수 있음
 
 class StockDataCollector:
     def __init__(self, api_config: Any = None): # api_config는 yfinance에 직접 필요하지 않음
@@ -13,8 +17,19 @@ class StockDataCollector:
         self.logger.info("yfinance StockDataCollector 초기화됨.")
         self.realtime_quote_cache: Dict[str, Dict[str, Any]] = {}
         self.cache_duration = pd.Timedelta(seconds=60) # 실시간 데이터 캐시 시간
+        self._last_request_time = 0 # 마지막 요청 시간 기록
 
+    def _wait_if_needed(self):
+        """필요한 경우 API 요청 전에 대기합니다."""
+        current_time = time.time()
+        elapsed = current_time - self._last_request_time
+        if elapsed < YFINANCE_REQUEST_DELAY:
+            wait_time = YFINANCE_REQUEST_DELAY - elapsed
+            self.logger.debug(f"yfinance API 요청 제한을 위해 {wait_time:.2f}초 대기합니다.")
+            time.sleep(wait_time)
+        self._last_request_time = time.time()
     def get_historical_data(self, symbol: str, timeframe: str = '1일', period: str = '1y') -> Optional[pd.DataFrame]:
+        self._wait_if_needed() # 요청 전에 대기
         self.logger.info(f"yfinance로 '{symbol}' 과거 데이터 요청 (시간대: {timeframe}, 기간: {period})")
 
         interval_map = {
@@ -90,6 +105,7 @@ class StockDataCollector:
             self.logger.debug(f"{symbol} 실시간 호가 캐시 사용 (yfinance)")
             return cached_item
 
+        self._wait_if_needed() # 요청 전에 대기
         try:
             ticker = yf.Ticker(symbol)
             info = ticker.info
