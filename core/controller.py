@@ -18,6 +18,11 @@ from data.database_manager import DatabaseManager
 # from data.models import Base # Base는 DatabaseManager 내부에서만 사용될 수 있음
 from config.settings import Settings
 from analysis.technical.indicators import add_all_selected_indicators
+from analysis.integrated_analyzer import IntegratedAnalyzer # 추가
+from analysis.sentiment.news_sentiment import NewsSentimentAnalyzer # IntegratedAnalyzer에 주입하기 위해
+
+
+
 # 임시 ModelManager (이전과 동일)
 class TempModelManager:
     def __init__(self):
@@ -51,6 +56,11 @@ class MainController(QObject):
     status_message_signal = pyqtSignal(str, int) # UI 상태바 메시지용 (message, timeout)
     task_feedback_signal = pyqtSignal(str, str) # UI 작업 피드백용 (task_name, status)
 
+    # --- Current Symbol Tracking ---
+    # This needs to be set by the UI when the symbol changes.
+    # MainWindow._on_symbol_changed should call a method here.
+    _current_selected_symbol: Optional[str] = None
+
     def __init__(self, settings: Settings):
         super().__init__()
         self.settings = settings
@@ -72,17 +82,63 @@ class MainController(QObject):
             self.logger.critical(f"데이터베이스 매니저 초기화 실패: {e}", exc_info=True)
             self.db_manager = None
         self.stock_collector = StockDataCollector(settings.api_config) # yfinance 기반 Collector
+        self.news_sentiment_analyzer = NewsSentimentAnalyzer() # APIConfig 주입 고려
         self.news_collector = NewsCollector(settings.api_config)
         self.economic_calendar_collector = EconomicCalendarCollector() # api_config는 현재 불필요
         self.model_manager = TempModelManager()
+        self.integrated_analyzer = IntegratedAnalyzer(news_sentiment_analyzer=self.news_sentiment_analyzer)
 
         self._data_cache: Dict[str, Any] = {}
         self._cache_lock = Lock()
         self._active_data_requests: set[str] = set() # 모든 데이터 요청 키 관리 (중복 방지용)
 
+        # --- Initial Data Load Status Flags ---
+        self._initial_news_loaded_for_symbol: Dict[str, bool] = {}
+        self._initial_econ_cal_loaded: bool = False
+        self._pending_analysis_for_symbol: Dict[str, bool] = {} # Track if analysis is pending due to missing data
         self._register_event_handlers()
         self._setup_scheduled_tasks()
+        
+
+
+        
         self.logger.info("메인 컨트롤러 초기화 완료. DB 연동 및 캐싱 로직 포함.")
+    def set_current_symbol(self, symbol: str):
+        """MainWindow에서 호출하여 현재 UI에 선택된 심볼을 설정합니다."""
+        self.logger.debug(f"Controller: 현재 선택된 심볼 변경됨 -> {symbol}")
+        self._current_selected_symbol = symbol
+        # 심볼 변경 시, 해당 심볼에 대한 분석 재요청 로직도 고려 가능 (만약 모든 데이터가 준비되었다면)
+        if self.is_all_initial_data_loaded_for_symbol(symbol):
+            self.logger.info(f"심볼 변경({symbol}): 모든 초기 데이터 로드됨. 분석 재요청 시도.")
+            # 과거 데이터가 이미 로드되어 있고, TA도 있다면 바로 분석 요청
+            cached_ta_data = self.get_cached_historical_data(symbol, self._get_current_timeframe_for_symbol(symbol), with_ta=True, copy=False)
+            if cached_ta_data is not None and not cached_ta_data.empty:
+                self.request_symbol_analysis(symbol, self._get_current_timeframe_for_symbol(symbol), cached_ta_data.copy())
+            else:
+                self.logger.warning(f"심볼 변경({symbol}): TA 데이터 캐시에 없어 분석 요청 보류. 과거 데이터 로드 후 자동 실행될 것임.")
+        else:
+            self.logger.info(f"심볼 변경({symbol}): 일부 초기 데이터 미로드 상태. 자동 분석 대기.")
+
+
+    def _get_current_timeframe_for_symbol(self, symbol: str) -> str:
+        """
+        현재 심볼에 대한 차트 위젯의 타임프레임을 가져오는 헬퍼.
+        실제 구현에서는 MainWindow에서 이 정보를 받아오거나, Controller가 상태를 알아야 합니다.
+        여기서는 임시로 기본값을 반환합니다.
+        """
+        # TODO: MainWindow와 연동하여 실제 현재 선택된 timeframe을 가져오도록 수정
+        # 예를 들어, self.main_window.chart_widget.timeframe_combo.currentText() 와 같이
+        # 지금은 임시로 '1일'을 사용
+        if hasattr(self, 'main_window_ref') and self.main_window_ref and hasattr(self.main_window_ref, 'chart_widget'):
+             return self.main_window_ref.chart_widget.timeframe_combo.currentText()
+        return '1일' # 기본값
+
+    def is_all_initial_data_loaded_for_symbol(self, symbol: str) -> bool:
+        """특정 심볼에 대한 모든 주요 초기 데이터(주가, 뉴스)와 공통 경제 데이터가 로드되었는지 확인합니다."""
+        stock_data_key = f"{symbol}_{self._get_current_timeframe_for_symbol(symbol)}_historical_ta"
+        is_stock_loaded = stock_data_key in self._data_cache and not self._data_cache[stock_data_key].empty
+        is_news_loaded = self._initial_news_loaded_for_symbol.get(symbol, False)
+        return is_stock_loaded and is_news_loaded and self._initial_econ_cal_loaded
 
     def _register_event_handlers(self):
         self.event_manager.subscribe('task_started', self._on_task_started)
@@ -102,10 +158,25 @@ class MainController(QObject):
                     replace_existing=True 
                 )
                 self.logger.info("경제 캘린더 일일 업데이트 작업 스케줄됨 (매일 07:00).")
+                # 예: 30분마다 현재 선택된 심볼 뉴스 업데이트 (만약 _current_selected_symbol이 있다면)
+                self.scheduler.add_job(
+                    self.request_news_update_for_current_symbol,
+                    'interval', minutes=30, id="periodic_news_update", replace_existing=True
+                )
+                self.logger.info("현재 심볼 뉴스 주기적 업데이트 작업 스케줄됨 (30분 간격).")
             except Exception as e:
                 self.logger.error(f"스케줄된 작업 설정 중 오류: {e}", exc_info=True)
         else:
             self.logger.warning("스케줄러 객체가 초기화되지 않아 스케줄 작업을 설정할 수 없습니다.")
+
+    def request_news_update_for_current_symbol(self):
+        """현재 UI에서 선택된 심볼에 대한 뉴스를 강제로 업데이트합니다."""
+        if self._current_selected_symbol:
+            self.logger.info(f"스케줄러: '{self._current_selected_symbol}'에 대한 뉴스 업데이트 요청 (강제 API 호출).")
+            # MainWindow에서 symbol_combo.currentText()를 가져와서 사용
+            self.request_news_data(f"{self._current_selected_symbol} stock news OR {self._current_selected_symbol}", force_fetch_from_api=True)
+        else:
+            self.logger.debug("스케줄러: 현재 선택된 심볼이 없어 뉴스 업데이트를 건너<0xEB><0x9A><0x88>니다.")
 
     def start(self):
         self.logger.info("컨트롤러 시작: 워크플로우 엔진 및 스케줄러 가동 시도.")
@@ -177,45 +248,59 @@ class MainController(QObject):
         if df_original_yf is None or df_original_yf.empty:
             self.historical_data_updated_signal.emit(symbol, pd.DataFrame())
             self.technical_indicators_updated_signal.emit(symbol, timeframe, pd.DataFrame())
+            self.task_feedback_signal.emit(task_display_name, "주가 데이터 없음 (처리 중단)")
             return
 
         self.task_feedback_signal.emit(task_display_name, "기술적 지표 계산 중...")
         df_for_ta = self._standardize_df_columns_and_index(df_original_yf, symbol, timeframe) # 표준화된 df (timestamp 컬럼, 소문자 ohlcv)
-        price_col_for_ta = 'adj_close' if 'adj_close' in df_for_ta.columns else 'close'
+        price_col_for_ta = 'adj_close' if 'adj_close' in df_for_ta.columns and df_for_ta['adj_close'].notna().any() else 'close'
         
         required_cols_for_ta = ['open', 'high', 'low', price_col_for_ta]
-        if not all(col in df_for_ta.columns for col in required_cols_for_ta):
-            self.logger.error(f"{task_display_name}: TA용 컬럼 누락: {df_for_ta.columns.tolist()}")
-            data_with_indicators = df_for_ta.copy() 
+        if not all(col in df_for_ta.columns for col in required_cols_for_ta) or df_for_ta[required_cols_for_ta].isnull().all().any():
+            self.logger.error(f"{task_display_name}: TA용 필수 컬럼 누락 또는 모두 NaN: {df_for_ta.columns.tolist()}")
+            data_with_indicators = df_for_ta.set_index('timestamp').copy() if 'timestamp' in df_for_ta else df_for_ta.copy()
         else:
             data_with_indicators = add_all_selected_indicators(df_for_ta.copy(), price_col=price_col_for_ta)
+            # data_with_indicators는 timestamp 컬럼을 가짐 (add_all_selected_indicators는 인덱스 변경 안 함)
+            if 'timestamp' in data_with_indicators.columns:
+                 data_with_indicators = data_with_indicators.set_index('timestamp')
         
         self.logger.info(f"{task_display_name}: 기술적 지표 계산 완료.")
         
-        if self.db_manager: # 기술적 지표도 DB에 저장
+        if self.db_manager:
             indicator_cols = [col for col in data_with_indicators.columns if any(kw in col for kw in ['SMA_', 'EMA_', 'RSI_', 'MACD', 'BB_'])]
-            if indicator_cols and 'timestamp' in data_with_indicators.columns:
+            if indicator_cols and not data_with_indicators.empty: # 이미 timestamp 인덱스
                 self.db_manager.save_bulk_technical_indicators(
-                    data_with_indicators, symbol, timeframe, indicator_cols, update_existing=True
-                ) # data_with_indicators는 timestamp 컬럼을 가지고 있어야 함
+                    data_with_indicators.reset_index(), symbol, timeframe, indicator_cols, update_existing=True
+                )
 
-        with self._cache_lock: # 캐시에는 yfinance 원본과 TA 포함본 둘 다 저장
-            self._data_cache[f"{symbol}_{timeframe}_historical"] = df_original_yf.copy()
-            self._data_cache[f"{symbol}_{timeframe}_historical_ta"] = data_with_indicators.set_index('timestamp').copy() # 분석/UI용은 timestamp 인덱스
+        with self._cache_lock:
+            self._data_cache[f"{symbol}_{timeframe}_historical"] = df_original_yf.copy() # 원본 yf
+            self._data_cache[f"{symbol}_{timeframe}_historical_ta"] = data_with_indicators.copy() # timestamp 인덱스, TA 포함
 
-        self.historical_data_updated_signal.emit(symbol, df_original_yf.copy()) # ChartWidget용 (yf 원본)
-        self.technical_indicators_updated_signal.emit(symbol, timeframe, data_with_indicators.set_index('timestamp').copy()) # DataWidget용 (timestamp 인덱스)
+        self.historical_data_updated_signal.emit(symbol, df_original_yf.copy())
+        self.technical_indicators_updated_signal.emit(symbol, timeframe, data_with_indicators.copy())
         
-        # ML 분석 요청
-        analysis_df = data_with_indicators.set_index('timestamp').copy()
-        if not hasattr(analysis_df, 'attrs'): analysis_df.attrs = {}
-        analysis_df.attrs['timeframe'] = timeframe
-        analysis_df.attrs['symbol'] = symbol
-        self.request_symbol_analysis(symbol, timeframe, analysis_df)
+        # 통합 분석 요청 전, 해당 심볼에 대한 초기 데이터 로드가 완료되었는지 확인
+        # 이 시점에는 주가 데이터는 로드되었으므로, is_all_initial_data_loaded_for_symbol 사용
+        if self.is_all_initial_data_loaded_for_symbol(symbol):
+            self.logger.info(f"{task_display_name}: 모든 관련 데이터 로드 확인, 통합 분석 요청.")
+            self.request_symbol_analysis(symbol, timeframe, data_with_indicators.copy())
+        else:
+            self.logger.info(f"{task_display_name}: 뉴스/경제 데이터 미로드, 통합 분석 보류. '{symbol}'에 대한 분석 펜딩 설정.")
+            self._pending_analysis_for_symbol[symbol] = True
+            # ML 예측만이라도 먼저 수행하고 UI에 일부 정보 표시
+            partial_analysis_results = {}
+            ml_prediction = self.model_manager.predict(symbol, data_with_indicators.copy())
+            if ml_prediction:
+                partial_analysis_results['ml_prediction'] = ml_prediction
+            partial_analysis_results['integrated_analysis'] = {'summary': "뉴스/경제 데이터 로딩 중..."} # 임시 메시지
+            self.analysis_result_updated_signal.emit(symbol, partial_analysis_results)
 
     def request_historical_data(self, symbol: str, timeframe: str, force_fetch_from_api: bool = False):
         request_key = f"historical_data_{symbol}_{timeframe}"
         task_display_name = f"{symbol}({timeframe}) 과거 데이터"
+        self._current_selected_symbol = symbol # 현재 작업중인 심볼 업데이트
 
         if not force_fetch_from_api:
             # 1. 메모리 캐시 확인
@@ -225,7 +310,19 @@ class MainController(QObject):
                 self.logger.info(f"{task_display_name}: 메모리 캐시에서 로드.")
                 self.historical_data_updated_signal.emit(symbol, cached_original.copy())
                 self.technical_indicators_updated_signal.emit(symbol, timeframe, cached_ta.copy())
-                self.request_symbol_analysis(symbol, timeframe, cached_ta.copy()) # cached_ta는 이미 timestamp 인덱스
+                # 캐시에서 로드 시에도 통합 분석 요청
+                if self.is_all_initial_data_loaded_for_symbol(symbol):
+                     self.request_symbol_analysis(symbol, timeframe, cached_ta.copy())
+                else:
+                    self.logger.info(f"{task_display_name} (캐시): 뉴스/경제 데이터 미로드, 통합 분석 보류.")
+                    self._pending_analysis_for_symbol[symbol] = True
+                    # ML 예측만이라도 먼저 수행
+                    partial_analysis_results = {}
+                    ml_prediction = self.model_manager.predict(symbol, cached_ta.copy())
+                    if ml_prediction: partial_analysis_results['ml_prediction'] = ml_prediction
+                    partial_analysis_results['integrated_analysis'] = {'summary': "뉴스/경제 데이터 로딩 중..."}
+                    self.analysis_result_updated_signal.emit(symbol, partial_analysis_results)
+
                 self.task_feedback_signal.emit(task_display_name, "캐시 로드 완료")
                 return
 
@@ -284,13 +381,16 @@ class MainController(QObject):
                 self.task_feedback_signal.emit(task_display_name, "API 주가 데이터 없음")
                 self.historical_data_updated_signal.emit(symbol, pd.DataFrame())
                 self.technical_indicators_updated_signal.emit(symbol, timeframe, pd.DataFrame())
+                # 실패 시에도 _pending_analysis_for_symbol 상태를 업데이트 할 필요는 없음. 데이터 자체가 없는 것이므로.
                 return None
 
             self.logger.info(f"{task_display_name}: API 주가 데이터 수집 성공 ({len(data_df_original_yf)} 행).")
             
             df_for_db_save = self._standardize_df_columns_and_index(data_df_original_yf, symbol, timeframe)
             if self.db_manager and not df_for_db_save.empty:
-                self.db_manager.save_stock_prices(symbol, timeframe, df_for_db_save.copy(), update_existing=True)
+                # DB 저장 시, df_for_db_save가 timestamp 컬럼을 가지도록 확인 (현재 _standardize... 함수가 그렇게 함)
+                self.db_manager.save_stock_prices(symbol, timeframe, df_for_db_save.set_index('timestamp').copy(), update_existing=True)
+
 
             self._process_and_emit_historical_data(symbol, timeframe, data_df_original_yf, task_display_name)
             self.task_feedback_signal.emit(task_display_name, "API 데이터 처리 완료")
@@ -354,30 +454,37 @@ class MainController(QObject):
             self.logger.debug(f"태스크 종료 (API): {task_display_name}")
 
     def request_news_data(self, symbol_or_keywords: str, language: str = 'en', force_fetch_from_api: bool = False):
-        request_key = f"news_{symbol_or_keywords.replace(' ','_')}_{language}"
-        task_display_name = f"뉴스({symbol_or_keywords})"
+        # symbol_or_keywords에서 실제 심볼 추출 (예: "AAPL stock news OR AAPL" -> "AAPL")
+        # 이 심볼을 _initial_news_loaded_for_symbol의 키로 사용
+        actual_symbol_for_flag = symbol_or_keywords.split(" ")[0].upper() # 간단한 추출 방식, 개선 필요
+
+        request_key = f"news_{actual_symbol_for_flag}_{language}" # 캐시/활성 태스크 키는 정제된 심볼 사용
+        task_display_name = f"뉴스({actual_symbol_for_flag})"
+
 
         if not force_fetch_from_api:
-            cached_news = self.get_cached_news_data(request_key) # 캐시 키를 request_key로 사용
-            if cached_news: # 캐시가 List[Dict] 형태
+            cached_news = self.get_cached_news_data(request_key)
+            if cached_news:
                 self.logger.info(f"{task_display_name}: 메모리 캐시에서 뉴스 로드.")
-                self.news_data_updated_signal.emit(symbol_or_keywords, cached_news)
+                self.news_data_updated_signal.emit(actual_symbol_for_flag, cached_news) # 시그널은 실제 심볼과 함께
+                self._initial_news_loaded_for_symbol[actual_symbol_for_flag] = True # 캐시에서 로드해도 초기 로드 완료로 간주
+                self._check_and_run_pending_analysis(actual_symbol_for_flag)
                 self.task_feedback_signal.emit(task_display_name, "뉴스 캐시 로드 완료")
                 return
             
             if self.db_manager:
                 self.task_feedback_signal.emit(task_display_name, "DB 뉴스 조회 중...")
-                keywords_list = [k.strip() for k in symbol_or_keywords.split("OR") if k.strip()]
                 db_news_df = self.db_manager.get_news_articles(
-                    keywords=keywords_list, 
-                    start_date=datetime.now() - timedelta(days=3), # 최근 3일
-                    limit=30 # 최대 30개
+                    symbol=actual_symbol_for_flag, # DB 조회 시에는 정제된 심볼 사용
+                    start_date=datetime.now() - timedelta(days=3), limit=30
                 ) 
                 if db_news_df is not None and not db_news_df.empty:
-                    db_news_list = db_news_df.to_dict('records') # DataFrame -> List[Dict]
+                    db_news_list = db_news_df.to_dict('records')
                     self.logger.info(f"{task_display_name}: DB에서 뉴스 로드 ({len(db_news_list)}개).")
                     with self._cache_lock: self._data_cache[request_key] = db_news_list
-                    self.news_data_updated_signal.emit(symbol_or_keywords, db_news_list)
+                    self.news_data_updated_signal.emit(actual_symbol_for_flag, db_news_list)
+                    self._initial_news_loaded_for_symbol[actual_symbol_for_flag] = True # DB 로드도 초기 로드 완료
+                    self._check_and_run_pending_analysis(actual_symbol_for_flag)
                     self.task_feedback_signal.emit(task_display_name, "DB 뉴스 로드 완료")
                     return
         
@@ -387,52 +494,67 @@ class MainController(QObject):
         self._add_active_task(request_key)
         task = Task(
             id=f"{request_key}_{datetime.now().timestamp()}", name=task_display_name,
-            function=self._task_fetch_news_data_from_api, args=(symbol_or_keywords, language, request_key),
+            function=self._task_fetch_news_data_from_api, args=(symbol_or_keywords, language, actual_symbol_for_flag, request_key), # actual_symbol_for_flag 추가
             kwargs={'task_display_name': task_display_name}, priority=2
         )
         self.workflow_engine.submit_task(task)
 
-    def _task_fetch_news_data_from_api(self, symbol_or_keywords: str, language: str, request_key: str, task_display_name: str) -> Optional[List[Dict]]:
+    def _task_fetch_news_data_from_api(self, symbol_or_keywords: str, language: str, actual_symbol_for_flag: str, request_key: str, task_display_name: str) -> Optional[List[Dict]]:
         self.logger.debug(f"태스크 시작 (API): {task_display_name}")
         news_list = None
         try:
             self.task_feedback_signal.emit(task_display_name, "API 뉴스 데이터 요청 중...")
             news_list = self.news_collector.get_latest_news_by_keywords(symbol_or_keywords, language=language, page_size=20)
 
-            if news_list is not None: # API가 빈 리스트를 반환할 수도 있으므로 None만 체크
+            if news_list is not None:
                 self.logger.info(f"{task_display_name}: API 뉴스 수집 완료 ({len(news_list)}개).")
                 
-                if self.db_manager and news_list:
-                    # NewsArticle 모델에 맞게 데이터 변환 필요 (예: source, publishedAt 등)
-                    processed_news_list = []
-                    for item in news_list:
+                processed_for_db_list = []
+                if news_list: # 뉴스가 있을 때만 DB 저장 시도
+                    for item in news_list: # DB 저장용 데이터 변환
                         source_info = item.get('source')
                         p_item = {
                             'source_name': source_info.get('name') if isinstance(source_info, dict) else source_info,
                             'title': item.get('title'),
                             'url': item.get('url'),
-                            'published_at': pd.to_datetime(item.get('publishedAt'), errors='coerce').to_pydatetime() if item.get('publishedAt') else datetime.now(),
-                            'content_snippet': item.get('description') or item.get('content',''), # API 응답에 따라
-                            'related_symbols': [k.strip() for k in symbol_or_keywords.split("OR")] # 간단히 키워드를 심볼로
+                            'published_at': pd.to_datetime(item.get('published_at'), errors='coerce', utc=True).to_pydatetime() if item.get('published_at') else datetime.utcnow(),
+                            'content_snippet': item.get('description') or item.get('text_for_analysis', ''), # text_for_analysis 사용
+                            'related_symbols': [actual_symbol_for_flag], # 실제 심볼로 저장
+                            # 감성분석 결과는 NewsSentimentAnalyzer를 통해 별도로 추가되거나, NewsCollector에서 할 수도 있음.
+                            # 여기서는 NewsCollector가 반환하는 text_for_analysis를 저장한다고 가정.
+                            # sentiment_score, sentiment_label은 DB 저장 시점에 채워지거나, 나중에 업데이트 될 수 있음.
                         }
-                        if p_item['title'] and p_item['url']: # 필수값 체크
-                             processed_news_list.append(p_item)
-                    if processed_news_list:
-                        self.db_manager.save_news_articles(processed_news_list, update_existing=True)
+                        if p_item['title'] and p_item['url']:
+                             # NewsSentimentAnalyzer로 각 뉴스 아이템 감성 분석 후 저장
+                            if 'text_for_analysis' in item and item['text_for_analysis']:
+                                sentiment_result = self.news_sentiment_analyzer.analyze_sentiment(item['text_for_analysis'], symbol=actual_symbol_for_flag)
+                                p_item['sentiment_score'] = sentiment_result.get('sentiment_score')
+                                p_item['sentiment_label'] = sentiment_result.get('sentiment_label')
+                            processed_for_db_list.append(p_item)
+
+                if self.db_manager and processed_for_db_list:
+                    self.db_manager.save_news_articles(processed_for_db_list, update_existing=True)
                 
-                with self._cache_lock: self._data_cache[request_key] = news_list # 원본 API 응답 캐시
-                self.news_data_updated_signal.emit(symbol_or_keywords, news_list)
+                with self._cache_lock: self._data_cache[request_key] = news_list
+                self.news_data_updated_signal.emit(actual_symbol_for_flag, news_list) # 실제 심볼과 함께
+                self._initial_news_loaded_for_symbol[actual_symbol_for_flag] = True
+                self._check_and_run_pending_analysis(actual_symbol_for_flag)
                 self.task_feedback_signal.emit(task_display_name, f"API 뉴스 로드 완료 ({len(news_list)}개)")
                 return news_list
-            else:
+            else: # news_list is None (API 실패) 또는 빈 리스트
                 self.logger.warning(f"{task_display_name}: API 뉴스 수집 실패 또는 데이터 없음.")
                 self.task_feedback_signal.emit(task_display_name, "API 뉴스 로드 실패")
-                self.news_data_updated_signal.emit(symbol_or_keywords, [])
+                self.news_data_updated_signal.emit(actual_symbol_for_flag, [])
+                # 실패 시에도 해당 심볼에 대한 뉴스 로드가 시도되었음을 알림 (무한 대기 방지)
+                self._initial_news_loaded_for_symbol[actual_symbol_for_flag] = True 
+                self._check_and_run_pending_analysis(actual_symbol_for_flag) # 데이터가 없어도 분석은 시도 (IntegratedAnalyzer가 처리)
                 return None
         except Exception as e:
             self.logger.error(f"{task_display_name} API 처리 중 예외: {e}", exc_info=True)
             self.task_feedback_signal.emit(task_display_name, f"API 오류: {str(e)[:30]}...")
-            self.news_data_updated_signal.emit(symbol_or_keywords, [])
+            self.news_data_updated_signal.emit(actual_symbol_for_flag, [])
+            self._initial_news_loaded_for_symbol[actual_symbol_for_flag] = True
+            self._check_and_run_pending_analysis(actual_symbol_for_flag)
             return None
         finally:
             self._remove_active_task(request_key)
@@ -451,13 +573,17 @@ class MainController(QObject):
             # 경제 캘린더는 자주 변하지 않으므로, 캐시 유효 기간을 설정할 수 있음 (예: 1시간)
             cached_data = self.get_cached_economic_calendar_data()
             if cached_data is not None and not cached_data.empty:
-                 # 캐시된 데이터의 최신 날짜 확인 (예시)
-                if not cached_data.empty and 'datetime' in cached_data.columns:
-                    last_cached_date = pd.to_datetime(cached_data['datetime'].max())
-                    # 캐시 데이터가 요청 범위(오늘~days_future)를 충분히 포함하고 최근에 업데이트되었다면 사용
-                    if last_cached_date >= (datetime.now() + timedelta(days=days_future) - timedelta(hours=1)): # 1시간 이내 업데이트
+                if 'datetime' in cached_data.columns:
+                    last_cached_date_obj = pd.to_datetime(cached_data['datetime'].max())
+                    # 캐시 만료 시간 (예: 6시간)
+                    cache_expiry_time = datetime.now() - timedelta(hours=6)
+                    # 캐시된 데이터의 마지막 날짜가 요청 범위를 커버하고, 캐시가 너무 오래되지 않았다면 사용
+                    if last_cached_date_obj.tz_localize(None) >= (datetime.now() + timedelta(days=days_future)).replace(hour=0, minute=0, second=0, microsecond=0) and \
+                       last_cached_date_obj.tz_localize(None) > cache_expiry_time : # 마지막 업데이트 시간 체크도 추가 가능
                         self.logger.info(f"{task_display_name}: 메모리 캐시에서 로드.")
                         self.economic_data_updated_signal.emit(cached_data.copy())
+                        self._initial_econ_cal_loaded = True
+                        self._check_and_run_pending_analysis_for_all_symbols() # 경제 지표는 모든 심볼에 영향
                         self.task_feedback_signal.emit(task_display_name, "캐시 로드 완료")
                         return
             
@@ -475,6 +601,8 @@ class MainController(QObject):
                     with self._cache_lock:
                         self._data_cache["economic_calendar"] = db_events.copy()
                     self.economic_data_updated_signal.emit(db_events.copy())
+                    self._initial_econ_cal_loaded = True
+                    self._check_and_run_pending_analysis_for_all_symbols()
                     self.task_feedback_signal.emit(task_display_name, "DB 로드 완료")
                     return
         
@@ -516,6 +644,8 @@ class MainController(QObject):
                     self._data_cache["economic_calendar"] = calendar_df.copy()
                 
                 self.economic_data_updated_signal.emit(calendar_df.copy())
+                self._initial_econ_cal_loaded = True
+                self._check_and_run_pending_analysis_for_all_symbols()
                 self.task_feedback_signal.emit(task_display_name, f"웹 로드 완료 ({len(calendar_df)}개)")
                 return calendar_df
             # ... (이하 기존 _task_fetch_economic_calendar의 결과 처리 로직과 유사하게)
@@ -524,24 +654,51 @@ class MainController(QObject):
                 # 빈 DataFrame이라도 캐시/UI 업데이트하여 이전 데이터가 계속 보이지 않도록
                 with self._cache_lock: self._data_cache["economic_calendar"] = pd.DataFrame()
                 self.economic_data_updated_signal.emit(pd.DataFrame())
+                self._initial_econ_cal_loaded = True
+                self._check_and_run_pending_analysis_for_all_symbols()
                 self.task_feedback_signal.emit(task_display_name, "웹 데이터 없음")
                 return pd.DataFrame()
             else: # None 반환 시
                 self.logger.warning(f"{task_display_name}: 웹 스크레이핑 실패.")
                 self.task_feedback_signal.emit(task_display_name, "웹 로드 실패")
-                self.economic_data_updated_signal.emit(pd.DataFrame())
+                self.economic_data_updated_signal.emit(pd.DataFrame()) # 빈 DF 전달
+                self._initial_econ_cal_loaded = True # 실패해도 일단 로드 시도 완료로 간주 (무한 대기 방지)
+                self._check_and_run_pending_analysis_for_all_symbols()
                 return None
 
         except Exception as e:
             self.logger.error(f"{task_display_name} 웹 스크레이핑 태스크 중 예외: {e}", exc_info=True)
             self.task_feedback_signal.emit(task_display_name, f"웹 오류: {str(e)[:30]}...")
             self.economic_data_updated_signal.emit(pd.DataFrame())
+            self._initial_econ_cal_loaded = True
+            self._check_and_run_pending_analysis_for_all_symbols()
             return None
         finally:
             self._remove_active_task(request_key)
             self.logger.debug(f"태스크 종료 (웹 스크레이핑): {task_display_name}")
-    # --- Cached Data Getters ---
+            
+    def _check_and_run_pending_analysis(self, symbol: str):
+        """특정 심볼에 대해 보류 중인 분석이 있고 모든 데이터가 준비되면 실행합니다."""
+        if self._pending_analysis_for_symbol.get(symbol, False) and self.is_all_initial_data_loaded_for_symbol(symbol):
+            self.logger.info(f"'{symbol}'에 대한 보류된 통합 분석 실행 조건 충족. 분석 재요청.")
+            timeframe = self._get_current_timeframe_for_symbol(symbol) # 현재 심볼의 타임프레임 가져오기
+            cached_ta_data = self.get_cached_historical_data(symbol, timeframe, with_ta=True, copy=False)
+            if cached_ta_data is not None and not cached_ta_data.empty:
+                self.request_symbol_analysis(symbol, timeframe, cached_ta_data.copy())
+                self._pending_analysis_for_symbol[symbol] = False # 보류 해제
+            else:
+                self.logger.warning(f"'{symbol}' 보류 분석 실행 시도 중 TA 데이터 캐시에 없음. 과거 데이터 요청 선행 필요.")
+                # 이 경우 request_historical_data를 호출하여 전체 플로우를 다시 타도록 할 수 있음
+                # self.request_historical_data(symbol, timeframe, force_fetch_from_api=False) # force_fetch_from_api=False로 캐시/DB 먼저 시도
 
+    def _check_and_run_pending_analysis_for_all_symbols(self):
+        """경제 캘린더와 같이 모든 심볼에 영향을 줄 수 있는 데이터가 업데이트되었을 때 호출됩니다."""
+        if self._current_selected_symbol: # 현재 선택된 심볼이 있다면 해당 심볼에 대해 체크
+            self._check_and_run_pending_analysis(self._current_selected_symbol)
+        # 또는 모든 _pending_analysis_for_symbol을 순회하며 조건 충족 시 실행
+        # for symbol in list(self._pending_analysis_for_symbol.keys()):
+        #     if self._pending_analysis_for_symbol.get(symbol, False):
+        #         self._check_and_run_pending_analysis(symbol)
 
     def get_cached_historical_data(self, symbol: str, timeframe: str, with_ta: bool = False, copy: bool = True) -> Optional[pd.DataFrame]:
         """
@@ -579,72 +736,113 @@ class MainController(QObject):
             data = self._data_cache.get(cache_key)
             return list(data) if data is not None else None
 			
-    def request_symbol_analysis(self, symbol: str, timeframe: str, data_df: Optional[pd.DataFrame] = None):
-        task_display_name = f"{symbol}({timeframe}) AI 분석" # 이름 구체화
-        self.task_feedback_signal.emit(task_display_name, "요청 시작")
-
-        if data_df is None:
-            # 분석용 데이터는 읽기 전용이므로 복사하지 않음
-            data_df = self.get_cached_historical_data(symbol, timeframe, with_ta=True, copy=False)
-            if data_df is None:
-                data_df = self.get_cached_historical_data(symbol, timeframe, with_ta=False, copy=False)
-            
-        if data_df is None or data_df.empty:
-            msg = f"{task_display_name} 실패: AI 분석용 데이터 없음."
-            self.status_message_signal.emit(msg, 5000)
-            self.logger.warning(msg)
-            self.task_feedback_signal.emit(task_display_name, "AI 분석 데이터 부족")
-            return
-
-        # attrs는 복사 시 유지되지 않을 수 있으므로, 다시 설정하거나 확인
-        if not hasattr(data_df, 'attrs'):
-            data_df.attrs = {}
-        data_df.attrs['timeframe'] = timeframe
-        data_df.attrs['symbol'] = symbol
-
-        task = Task(
-            id=f"analyze_symbol_{symbol}_{timeframe.replace(' ','_')}", name=task_display_name,
-            function=self._task_run_analysis, args=(symbol, data_df.copy()), # 데이터 복사본 전달
-            kwargs={'task_display_name': task_display_name}, priority=2 # 데이터 수집보다 낮은 우선순위
-        )
-        self.workflow_engine.submit_task(task)
-
-    def _task_run_analysis(self, symbol: str, data_df: pd.DataFrame, task_display_name: str) -> Optional[Dict]:
-        # ... (이하 동일, data_df는 기술적 지표가 이미 포함된 것으로 가정하고 사용)
-        self.logger.debug(f"태스크 시작: {task_display_name} (데이터 컬럼: {data_df.columns.tolist()[:5]}...)")
-        analysis_results = {}
-        try:
-            self.task_feedback_signal.emit(task_display_name, "AI 모델 예측 중...")
-            # TempModelManager의 predict는 'close' 컬럼을 사용함. df_for_ta에서 소문자로 변경했으므로 괜찮음.
-            prediction = self.model_manager.predict(symbol, data_df) 
-            if prediction:
-                analysis_results['ml_prediction'] = prediction
-                self.logger.debug(f"{task_display_name} - ML 예측 완료: {prediction}")
-            
-            # 여기에 뉴스 감성, 경제 지표 등을 종합하는 로직 추가 예정
-            # 예: analysis_results['news_sentiment_score'] = self.get_latest_news_sentiment(symbol)
-            # 예: analysis_results['economic_impact_assessment'] = self.assess_economic_events(symbol, data_df.index[-1])
-
-            if analysis_results:
-                self.analysis_result_updated_signal.emit(symbol, analysis_results)
-                self.task_feedback_signal.emit(task_display_name, "AI 분석 완료")
-                self.logger.info(f"{task_display_name} 완료. 결과: {analysis_results}")
-                return analysis_results
-            else:
-                self.logger.info(f"{task_display_name}: AI 분석 결과 없음.")
-                self.task_feedback_signal.emit(task_display_name, "AI 분석 결과 없음")
-                return None
-        except Exception as e:
-            self.logger.error(f"{task_display_name} 태스크 중 예외: {e}", exc_info=True)
-            self.task_feedback_signal.emit(task_display_name, f"AI 분석 오류: {str(e)[:30]}...")
-            return None
-        finally:
-            self.logger.debug(f"태스크 종료: {task_display_name}")
-
     def get_cached_realtime_data(self, symbol: str) -> Optional[Dict]:
         with self._cache_lock:
             data = self._data_cache.get(f"{symbol}_realtime")
-            return dict(data) if data is not None else None # 딕셔너리 복사본
+            return dict(data) if data is not None and isinstance(data, dict) else None
+    def request_symbol_analysis(self, symbol: str, timeframe: str, data_df: Optional[pd.DataFrame] = None):
+        task_display_name = f"{symbol}({timeframe}) AI 분석"
+        request_key = f"analyze_symbol_{symbol}_{timeframe.replace(' ','_')}" # 고유한 ID 생성
+
+        # 이미 활성화된 분석 작업이 있다면 중복 제출 방지 (선택적)
+        if self._is_task_active(request_key):
+             self.logger.debug(f"{task_display_name} 작업이 이미 진행 중입니다. 중복 요청 건너<0xEB><0x9A><0x88>니다.")
+             return
+
+        self.task_feedback_signal.emit(task_display_name, "요청 시작")
+        self._add_active_task(request_key) # 작업 시작 시 활성 목록에 추가
+
+        # 분석용 데이터 준비 (기술적 지표 포함된 데이터)
+        if data_df is None or data_df.empty:
+            data_df_for_analysis = self.get_cached_historical_data(symbol, timeframe, with_ta=True, copy=False)
+            if data_df_for_analysis is None or data_df_for_analysis.empty:
+                msg = f"{task_display_name} 실패: AI 분석용 TA 데이터 없음."
+                self.status_message_signal.emit(msg, 5000)
+                self.logger.warning(msg)
+                self.task_feedback_signal.emit(task_display_name, "AI 분석 TA 데이터 부족")
+                self._remove_active_task(request_key) # 작업 실패로 간주하고 제거
+                # 빈 결과라도 시그널을 보내 UI를 초기화 할 수 있음
+                self.analysis_result_updated_signal.emit(symbol, {'ml_prediction': None, 'integrated_analysis': {'summary': "분석 데이터 부족"}})
+                return
+        else:
+            data_df_for_analysis = data_df # 제공된 데이터 사용 (복사본으로 전달됨)
+
+        if not hasattr(data_df_for_analysis, 'attrs'): data_df_for_analysis.attrs = {}
+        data_df_for_analysis.attrs['timeframe'] = timeframe
+        data_df_for_analysis.attrs['symbol'] = symbol
+
+        task = Task(
+            id=request_key, name=task_display_name, # id를 request_key로 사용
+            function=self._task_run_analysis, args=(symbol, data_df_for_analysis.copy()),
+            kwargs={'task_display_name': task_display_name, 'request_key': request_key}, priority=2
+        )
+        self.workflow_engine.submit_task(task)
+
+
+    def _task_run_analysis(self, symbol: str, data_df_with_ta: pd.DataFrame, task_display_name: str, request_key: str) -> Optional[Dict]:
+        self.logger.debug(f"태스크 시작: {task_display_name} (TA 데이터 컬럼: {data_df_with_ta.columns.tolist()[:5]}...)")
+        analysis_output = {'ml_prediction': None, 'integrated_analysis': None, 'overall_signal': '데이터 부족', 'signal_reason': ''}
+        try:
+            self.task_feedback_signal.emit(task_display_name, "AI 모델 예측 및 통합 분석 중...")
+
+            # 1. ML 모델 예측
+            prediction = self.model_manager.predict(symbol, data_df_with_ta.copy())
+            if prediction:
+                analysis_output['ml_prediction'] = prediction
+                self.logger.debug(f"{task_display_name} - ML 예측 완료: {prediction}")
+
+            # 2. 통합 분석을 위한 데이터 준비
+            # 뉴스 데이터는 캐시/DB에서 가져옴. request_key와 유사한 키 사용
+            news_cache_key = f"news_{symbol}_en" # 언어는 설정 또는 동적으로
+            recent_news_list = self.get_cached_news_data(news_cache_key)
+            recent_news_for_symbol_df = pd.DataFrame(recent_news_list) if recent_news_list else pd.DataFrame()
+            if not recent_news_for_symbol_df.empty and 'published_at' in recent_news_for_symbol_df.columns:
+                 recent_news_for_symbol_df['published_at'] = pd.to_datetime(recent_news_for_symbol_df['published_at'], errors='coerce', utc=True)
+                 # IntegratedAnalyzer는 이미 분석된 sentiment_score 등을 기대할 수 있음
+                 # 만약 raw news list라면 여기서 sentiment 분석 필요
+                 # 여기서는 NewsCollector가 반환한 (또는 DB에 저장된) 데이터가 이미 분석되었다고 가정
+                 # 또는 self.news_sentiment_analyzer.analyze_news_batch(recent_news_list)를 호출하여 즉석 분석
+
+            # 경제 지표 데이터 (향후 7일치, 중요도 1 이상)
+            upcoming_economic_events_df = self.get_cached_economic_calendar_data(copy=False) # 원본 참조 가능
+            if upcoming_economic_events_df is None:
+                upcoming_economic_events_df = pd.DataFrame()
+
+
+            # 3. IntegratedAnalyzer 실행
+            integrated_analysis_result = self.integrated_analyzer.analyze_symbol_impact(
+                symbol=symbol,
+                recent_news_df=recent_news_for_symbol_df,
+                upcoming_economic_events_df=upcoming_economic_events_df,
+                current_price_data=self.get_cached_realtime_data(symbol),
+                historical_data_df=data_df_with_ta # TA 포함 데이터 전달
+            )
+
+            if integrated_analysis_result:
+                analysis_output['integrated_analysis'] = integrated_analysis_result
+                analysis_output['overall_signal'] = integrated_analysis_result.get('short_term_outlook_label', 'N/A')
+                key_pos = integrated_analysis_result.get('key_positive_factors', [])
+                key_risk = integrated_analysis_result.get('key_risk_factors', [])
+                analysis_output['signal_reason'] = "; ".join(key_pos + key_risk)
+            else: # integrated_analysis_result가 None이거나 비었을 경우
+                analysis_output['integrated_analysis'] = {'summary': "통합 분석 데이터 부족 또는 오류"}
+
+
+            self.analysis_result_updated_signal.emit(symbol, analysis_output.copy())
+            self.task_feedback_signal.emit(task_display_name, "AI 분석 및 통합 분석 완료")
+            self.logger.info(f"{task_display_name} 완료. ML: {analysis_output.get('ml_prediction') != None}, 통합: {analysis_output.get('integrated_analysis') != None}")
+            return analysis_output
+
+        except Exception as e:
+            self.logger.error(f"{task_display_name} 태스크 중 예외: {e}", exc_info=True)
+            self.task_feedback_signal.emit(task_display_name, f"분석 오류: {str(e)[:30]}...")
+            analysis_output['error'] = str(e)
+            self.analysis_result_updated_signal.emit(symbol, analysis_output.copy())
+            return None
+        finally:
+            self._remove_active_task(request_key) # 작업 완료/실패 시 활성 목록에서 제거
+            self.logger.debug(f"태스크 종료: {task_display_name}")
+            
 
     def _on_task_started(self, event_data: Dict[str, Any]):
         task_id = event_data.get('task_id')
@@ -660,25 +858,31 @@ class MainController(QObject):
 
     def _on_task_failed(self, event_data: Dict[str, Any]):
         task_id = event_data.get('task_id')
+        error_msg = event_data.get('error')
         task = self.workflow_engine.tasks.get(task_id)
         task_name = task.name if task else task_id
-        error_msg = event_data.get('error')
+        # 실패한 작업은 활성 목록에서 제거 (WorkflowEngine에서 task_id를 주므로 사용 가능)
+        if task_id and task_id in self._active_data_requests:
+             self._remove_active_task(task_id)
         self.logger.error(f"이벤트 수신: 작업 실패 - '{task_name}' (ID: {task_id}) - 오류: {error_msg}")
 
     def apply_updated_settings(self):
         self.logger.info("변경된 설정 적용 시도...")
         try:
-            # API 키 변경 시 수집기 재초기화
             self.stock_collector = StockDataCollector(self.settings.api_config)
             self.news_collector = NewsCollector(self.settings.api_config)
-            
-            if self.db_manager: # DB 매니저가 있다면 DB 설정도 업데이트 시도
+            # IntegratedAnalyzer와 NewsSentimentAnalyzer도 API 키 변경에 영향받으면 재초기화 필요
+            self.news_sentiment_analyzer = NewsSentimentAnalyzer() # settings.api_config 주입 고려
+            self.integrated_analyzer = IntegratedAnalyzer(news_sentiment_analyzer=self.news_sentiment_analyzer)
+
+
+            if self.db_manager:
                 self.logger.info("DB 설정 변경 감지. DatabaseManager 재초기화 시도...")
-                self.db_manager.close() # 기존 연결 종료
+                self.db_manager.close()
                 self.db_manager = DatabaseManager(database_config=self.settings.db_config)
                 self.logger.info("DatabaseManager 재초기화 완료.")
 
-            self.logger.info("설정 적용 완료: 데이터 수집기 및 DB 매니저 재초기화됨.")
+            self.logger.info("설정 적용 완료.")
             self.status_message_signal.emit("설정이 성공적으로 업데이트 및 적용되었습니다.", 3000)
         except Exception as e:
             self.logger.error(f"설정 적용 중 오류 발생: {e}", exc_info=True)

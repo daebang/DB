@@ -5,6 +5,7 @@ from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 import pandas as pd # 데이터 처리를 위해 추가
 import logging
+from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -108,28 +109,46 @@ class DataWidget(QWidget):
         return widget
 
     def _create_sentiment_tab(self):
-        """뉴스 감성 탭 생성"""
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.setContentsMargins(5,5,5,5)
+        layout.setContentsMargins(10, 10, 10, 10) # 여백 약간 추가
 
-        # 종목별 종합 감성 정보 (예시)
-        top_info_layout = QFormLayout()
+        # 종목별 종합 감성 정보 (QGroupBox으로 묶기)
+        sentiment_summary_group = QGroupBox("뉴스 감성 요약 (최근 24시간)")
+        summary_layout = QFormLayout()
+        summary_layout.setSpacing(8)
+
         self.overall_sentiment_score_label = QLabel("-")
-        self.overall_sentiment_trend_label = QLabel("-")
+        self.overall_sentiment_trend_label = QLabel("-") # 예: "개선 중", "악화 중", "안정적"
         self.news_count_label = QLabel("-")
+        self.positive_news_ratio_label = QLabel("-") # 긍정 뉴스 비율
+        self.negative_news_ratio_label = QLabel("-") # 부정 뉴스 비율
 
-        top_info_layout.addRow("최근 24시간 평균 감성 점수:", self.overall_sentiment_score_label)
-        top_info_layout.addRow("감성 트렌드:", self.overall_sentiment_trend_label)
-        top_info_layout.addRow("관련 뉴스 수 (24h):", self.news_count_label)
-        layout.addLayout(top_info_layout)
+        # 라벨 스타일링
+        for lbl in [self.overall_sentiment_score_label, self.overall_sentiment_trend_label,
+                    self.news_count_label, self.positive_news_ratio_label, self.negative_news_ratio_label]:
+            lbl.setFont(QFont("Arial", 10))
+
+        summary_layout.addRow("평균 감성 점수:", self.overall_sentiment_score_label)
+        summary_layout.addRow("감성 트렌드:", self.overall_sentiment_trend_label)
+        summary_layout.addRow("관련 뉴스 수:", self.news_count_label)
+        summary_layout.addRow("긍정 뉴스 비율:", self.positive_news_ratio_label)
+        summary_layout.addRow("부정 뉴스 비율:", self.negative_news_ratio_label)
+        sentiment_summary_group.setLayout(summary_layout)
+        layout.addWidget(sentiment_summary_group)
 
         # 뉴스 목록
         self.news_list_widget = QListWidget()
         self.news_list_widget.setAlternatingRowColors(True)
-        self.news_list_widget.itemDoubleClicked.connect(self._on_news_item_double_clicked) # 더블클릭 시 브라우저로 링크 열기
+        self.news_list_widget.itemDoubleClicked.connect(self._on_news_item_double_clicked)
+        self.news_list_widget.setStyleSheet("""
+            QListWidget::item { padding: 5px; }
+            QListWidget::item:hover { background-color: #4a4a4a; }
+        """) # 아이템 패딩 및 호버 효과
 
-        layout.addWidget(QLabel("최근 주요 뉴스:"))
+        news_list_label = QLabel("최근 주요 뉴스")
+        news_list_label.setFont(QFont("Arial", 11, QFont.Bold))
+        layout.addWidget(news_list_label)
         layout.addWidget(self.news_list_widget)
         return widget
 
@@ -462,53 +481,117 @@ class DataWidget(QWidget):
 
         self.technical_table.setSortingEnabled(True)
         logger.info(f"{symbol} ({timeframe}) 기술적 지표 테이블 업데이트 완료 ({len(indicator_cols)}개 지표).")
-    def update_news_display(self, news_items: list):
-        """ 뉴스 목록 및 감성 요약 정보를 받아 UI에 표시 """
-        self.news_list_widget.clear()
+        
+    # update_news_display는 Controller로부터 news_items와 news_summary_data를 함께 받도록 수정
+    # 또는 news_items만 받고, DataWidget 내부에서 controller.get_news_summary(symbol) 호출
+    def update_news_display(self, news_items: list, news_summary: Optional[Dict] = None): # news_summary 인자 추가
+        self.news_list_widget.clear() # 기존 목록 지우기
+
+        if news_summary:
+            self.overall_sentiment_score_label.setText(f"{news_summary.get('avg_sentiment', 0.0):.2f}")
+            self.overall_sentiment_trend_label.setText(str(news_summary.get('sentiment_trend', '-')))
+            self.news_count_label.setText(str(news_summary.get('news_count', 0)))
+            self.positive_news_ratio_label.setText(f"{news_summary.get('positive_news_ratio', 0.0):.1%}")
+            self.negative_news_ratio_label.setText(f"{news_summary.get('negative_news_ratio', 0.0):.1%}")
+
+            # 점수/트렌드에 따른 색상 변경 (예시)
+            avg_sent = news_summary.get('avg_sentiment', 0.0)
+            if avg_sent > 0.1: self.overall_sentiment_score_label.setStyleSheet("color: #4CAF50;") # 초록
+            elif avg_sent < -0.1: self.overall_sentiment_score_label.setStyleSheet("color: #F44336;") # 빨강
+            else: self.overall_sentiment_score_label.setStyleSheet("") # 기본색
+
+            trend = news_summary.get('sentiment_trend', '-')
+            if trend == 'improving': self.overall_sentiment_trend_label.setStyleSheet("color: #4CAF50;")
+            elif trend == 'deteriorating': self.overall_sentiment_trend_label.setStyleSheet("color: #F44336;")
+            else: self.overall_sentiment_trend_label.setStyleSheet("")
+
+        else: # 요약 정보가 없으면 기본값으로
+            self.overall_sentiment_score_label.setText("-")
+            self.overall_sentiment_trend_label.setText("-")
+            self.news_count_label.setText("-")
+            self.positive_news_ratio_label.setText("-")
+            self.negative_news_ratio_label.setText("-")
+            self.overall_sentiment_score_label.setStyleSheet("")
+            self.overall_sentiment_trend_label.setStyleSheet("")
+
+
         if not news_items:
             no_news_item = QListWidgetItem("최근 뉴스가 없습니다.")
             no_news_item.setForeground(QColor("#AAAAAA"))
             self.news_list_widget.addItem(no_news_item)
             return
 
-        # TODO: 뉴스 아이템에서 감성 점수 추출 및 아이콘/색상으로 표시
-        # news_items는 [{'title': ..., 'url': ..., 'sentiment_score': 0.5 (예시)} ...] 형태라고 가정
-        for news in news_items:
+        for news in news_items[:30]: # 너무 많은 뉴스는 UI 성능 저하, 최근 30개만 표시
             title = news.get('title', '제목 없음')
             url = news.get('url')
-            sentiment_score = news.get('sentiment_score') # 감성 분석 결과가 포함되어 있다고 가정
+            source_name = news.get('source_name', news.get('source', {}).get('name', 'N/A'))
+            published_at_dt = news.get('published_at')
+            if isinstance(published_at_dt, str): # 문자열이면 datetime으로 변환
+                published_at_dt = pd.to_datetime(published_at_dt, errors='coerce', utc=True)
 
-            display_text = title
-            icon = None
-            tooltip = f"URL: {url}\n"
+            published_at_str = published_at_dt.strftime('%Y-%m-%d %H:%M') if pd.notna(published_at_dt) else 'N/A'
 
-            if sentiment_score is not None:
-                if sentiment_score > 0.2:
-                    icon = QIcon.fromTheme("face-smile") # 또는 사용자 정의 아이콘
-                    display_text = f"🟢 {title}"
-                    tooltip += f"감성점수: {sentiment_score:.2f} (긍정적)"
-                elif sentiment_score < -0.2:
-                    icon = QIcon.fromTheme("face-sad")
-                    display_text = f"🔴 {title}"
-                    tooltip += f"감성점수: {sentiment_score:.2f} (부정적)"
-                else:
-                    icon = QIcon.fromTheme("face-plain")
-                    display_text = f"⚪ {title}"
-                    tooltip += f"감성점수: {sentiment_score:.2f} (중립적)"
+            # sentiment_score는 news_items에 이미 포함되어 있다고 가정 (NewsCollector 또는 Controller에서 처리)
+            sentiment_score = news.get('sentiment_score') # IntegratedAnalyzer 결과가 아닌 개별 뉴스 감성
+            sentiment_label = news.get('sentiment_label', self._get_label_from_score(sentiment_score) if sentiment_score is not None else "neutral")
 
 
-            list_item = QListWidgetItem(display_text)
-            if icon:
-                list_item.setIcon(icon)
-            list_item.setData(Qt.UserRole, url) # URL 정보 저장
-            list_item.setToolTip(tooltip)
+            # HTML로 아이템 텍스트 구성
+            item_html = f"""
+            <div style='margin-bottom: 3px;'>
+                <strong style='font-size: 10pt;'>{title}</strong><br/>
+                <small style='color: #AAAAAA;'>{source_name} - {published_at_str}</small>
+            </div>
+            """
+            list_item = QListWidgetItem()
+            # list_item.setText(title) # 직접 텍스트 설정 대신 라벨 사용
+
+            # QLabel을 사용하여 HTML 렌더링 (더 유연함)
+            item_label = QLabel(item_html)
+            item_label.setWordWrap(True)
+            item_label.setOpenExternalLinks(False) # 링크는 더블클릭으로 처리
+
+            # 아이콘 설정 (기존 로직 활용)
+            icon = QIcon()
+            text_color = QColor(self.palette().color(QPalette.Text)) # 현재 테마의 기본 텍스트 색상
+
+            if sentiment_label == 'positive':
+                icon = QIcon.fromTheme("face-smile-symbolic", QIcon(":/qt-project.org/styles/commonstyle/images/standardbutton-apply-16.png")) # 대체 아이콘
+                text_color = QColor("#4CAF50")
+            elif sentiment_label == 'negative':
+                icon = QIcon.fromTheme("face-sad-symbolic", QIcon(":/qt-project.org/styles/commonstyle/images/standardbutton-cancel-16.png"))
+                text_color = QColor("#F44336")
+            else: # neutral
+                icon = QIcon.fromTheme("face-plain-symbolic", QIcon(":/qt-project.org/styles/commonstyle/images/standardbutton-help-16.png"))
+
+            list_item.setIcon(icon)
+            list_item.setData(Qt.UserRole, url)
+            list_item.setToolTip(f"{title}\nURL: {url}\nSentiment: {sentiment_label} ({sentiment_score:.2f} if sentiment_score is not None else 'N/A')\n더블클릭하여 원본 기사 열기")
+            # list_item.setForeground(text_color) # QListWidgetItem 자체의 색상보다 내부 라벨 스타일 활용
+
+            # QListWidgetItem에 QLabel을 직접 설정할 수 없으므로,
+            # QListWidget에 setItemWidget을 사용하거나, list_item.setText(item_html) 후 view()에서 HTML delegate 사용.
+            # 여기서는 QListWidgetItem의 기본 텍스트 표시 기능을 활용하고, 스타일은 아이콘과 툴팁으로 강화.
+            # 더 복잡한 레이아웃을 원하면 setItemWidget 사용.
+            # 간단히는, 타이틀만 QListWidgetItem 텍스트로, 나머지는 툴팁으로.
+            list_item.setText(f"{title} ({source_name})") # 아이템에 표시될 주 텍스트
+            if sentiment_label == 'positive': list_item.setForeground(QColor("#C8E6C9")) # 연한 초록
+            elif sentiment_label == 'negative': list_item.setForeground(QColor("#FFCDD2")) # 연한 빨강
+            
             self.news_list_widget.addItem(list_item)
 
-        # TODO: 전체 뉴스 감성 요약 정보 업데이트 (별도 데이터 필요)
-        # self.overall_sentiment_score_label.setText(...)
-        # self.overall_sentiment_trend_label.setText(...)
-        # self.news_count_label.setText(f"{len(news_items)}개")
 
+    def _get_label_from_score(self, score: float, positive_threshold=0.1, negative_threshold=-0.1) -> str:
+        """점수로부터 감성 라벨을 반환합니다. (DataWidget 내 로컬 헬퍼)"""
+        if score is None: return 'neutral'
+        if score > positive_threshold: return 'positive'
+        if score < negative_threshold: return 'negative'
+        return 'neutral'
+    
+    def _on_news_item_double_clicked(self, item: QListWidgetItem):
+        url = item.data(Qt.UserRole)
+        if url:
+            QDesktopServices.openUrl(QUrl(url))
 
     def _on_news_item_double_clicked(self, item: QListWidgetItem):
         """ 뉴스 항목 더블클릭 시 URL 열기 """
@@ -517,49 +600,71 @@ class DataWidget(QWidget):
             QDesktopServices.openUrl(QUrl(url))
 
 
-    def update_analysis_display(self, analysis_data: dict):
-        """ AI 분석 및 종합 판단 결과를 받아 UI에 표시 """
-        ml_pred = analysis_data.get('ml_prediction', {})
-        direction = ml_pred.get('action', '-') # BUY, SELL, HOLD 등
-        confidence = ml_pred.get('confidence', 0.0)
-        target_price = ml_pred.get('target_price') # 모델이 목표가를 제공한다면
+    def update_analysis_display(self, analysis_results: dict): # analysis_results는 Controller에서 오는 전체 결과
+        # ML 예측 부분
+        ml_pred = analysis_results.get('ml_prediction', {})
+        self.ml_direction_label.setText(str(ml_pred.get('action', '-')))
+        ml_conf = ml_pred.get('confidence', 0.0)
+        self.ml_confidence_label.setText(f"{ml_conf:.0%}" if ml_conf else "-")
+        target_p = ml_pred.get('target_price')
+        self.target_price_label.setText(f"${target_p:.2f}" if target_p else "-")
+        if ml_pred.get('action') == 'BUY': self.ml_direction_label.setStyleSheet("color: #4CAF50;")
+        elif ml_pred.get('action') == 'SELL': self.ml_direction_label.setStyleSheet("color: #F44336;")
+        else: self.ml_direction_label.setStyleSheet("")
 
-        self.ml_direction_label.setText(str(direction))
-        self.ml_confidence_label.setText(f"{confidence:.0%}" if confidence else "-")
 
-        if target_price:
-            self.target_price_label.setText(f"${target_price:.2f}")
-        else:
-            self.target_price_label.setText("-")
+        # 통합 분석 부분
+        integrated_data = analysis_results.get('integrated_analysis', {})
+        overall_signal_text = integrated_data.get('short_term_outlook_label', '데이터 부족')
+        self.overall_signal_label.setText(overall_signal_text)
 
-        # 종합 판단 로직 (Controller에서 처리 후 전달된 값 사용)
-        overall_signal = analysis_data.get('overall_signal', '-') # 예: "강력 매수", "관망"
-        signal_details = analysis_data.get('signal_reason', 'N/A')
+        # 종합 판단 라벨 스타일링
+        if "긍정적" in overall_signal_text:
+            self.overall_signal_label.setStyleSheet("font-size: 16px; font-weight: bold; color: white; background-color: #4CAF50; padding: 5px; border-radius: 5px;")
+        elif "부정적" in overall_signal_text:
+            self.overall_signal_label.setStyleSheet("font-size: 16px; font-weight: bold; color: white; background-color: #F44336; padding: 5px; border-radius: 5px;")
+        elif "중립적" in overall_signal_text:
+            self.overall_signal_label.setStyleSheet("font-size: 16px; font-weight: bold; color: black; background-color: #FFC107; padding: 5px; border-radius: 5px;") # 주황색
+        else: # 데이터 부족, 판단 보류 등
+            self.overall_signal_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #AAAAAA; background-color: #555555; padding: 5px; border-radius: 5px;")
 
-        self.overall_signal_label.setText(overall_signal)
-        if "매수" in overall_signal:
-            self.overall_signal_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #4CAF50;")
-        elif "매도" in overall_signal:
-            self.overall_signal_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #F44336;")
-        else:
-            self.overall_signal_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #FFC107;") # 관망 등은 주황색
+        integrated_conf = integrated_data.get('confidence', 0.0)
+        self.integrated_confidence_label.setText(f"통합 분석 신뢰도: {integrated_conf:.0%}")
 
-        # 기술적 지표, 뉴스 감성 등 다른 분석 결과도 함께 표시
-        summary_lines = [f"ML 예측: {direction} (신뢰도: {confidence:.0%})"]
-        if target_price:
-            summary_lines.append(f"AI 목표가: ${target_price:.2f}")
 
-        tech_summary = []
-        if 'sma_20' in analysis_data: tech_summary.append(f"SMA(20): {analysis_data['sma_20']:.2f}")
-        if 'rsi_14' in analysis_data: tech_summary.append(f"RSI(14): {analysis_data['rsi_14']:.2f}")
-        if tech_summary: summary_lines.append(f"기술적 지표: {', '.join(tech_summary)}")
+        # 분석 요약 텍스트 구성
+        summary_lines = []
+        if ml_pred:
+            summary_lines.append(f"<b>[ML 예측]</b>")
+            summary_lines.append(f"  - 방향: {ml_pred.get('action', '-')}, 신뢰도: {ml_conf:.0%}" + (f", 목표가: ${target_p:.2f}" if target_p else ""))
+            summary_lines.append(f"  - 근거: {ml_pred.get('reason', 'N/A')}")
+            summary_lines.append("-" * 30)
 
-        if 'news_sentiment' in analysis_data:
-            summary_lines.append(f"뉴스 감성: {analysis_data['news_sentiment']:.2f}")
+        if integrated_data:
+            summary_lines.append(f"<b>[통합 분석 ({integrated_data.get('short_term_outlook_label','-')})]</b>")
+            news_sum = integrated_data.get('news_analysis', {}).get('summary', '뉴스 분석 정보 없음.')
+            econ_sum = integrated_data.get('economic_event_analysis', {}).get('summary', '경제 이벤트 분석 정보 없음.')
+            summary_lines.append(f"  - 뉴스 요약: {news_sum}")
+            summary_lines.append(f"  - 경제 이벤트 요약: {econ_sum}")
 
-        summary_lines.append(f"\n종합 의견 근거: {signal_details}")
-        self.analysis_summary_text.setPlainText("\n".join(summary_lines))
+            positive_factors = integrated_data.get('key_positive_factors', [])
+            if positive_factors:
+                summary_lines.append(f"  - 주요 긍정 요인:")
+                for factor in positive_factors: summary_lines.append(f"    • {factor}")
 
-    # update_economic_indicators는 update_economic_indicators_display로 대체됨
-    # def update_economic_indicators(self, indicators: list):
-    #     pass
+            risk_factors = integrated_data.get('key_risk_factors', [])
+            if risk_factors:
+                summary_lines.append(f"  - 주요 리스크 요인:")
+                for factor in risk_factors: summary_lines.append(f"    • {factor}")
+
+            # 최근 중요 경제 이벤트 표시
+            crit_events = integrated_data.get('economic_event_analysis', {}).get('upcoming_critical_events', [])
+            if crit_events:
+                summary_lines.append(f"  - 주요 예정 경제 이벤트 (최대 3개):")
+                for ev in crit_events[:3]:
+                    summary_lines.append(f"    • {ev['datetime']} {ev['country']} {ev['event_name']} (중요도: {ev['importance']})")
+        
+        if not summary_lines:
+            summary_lines.append("분석 정보가 없습니다.")
+
+        self.analysis_summary_text.setHtml("<br>".join(summary_lines)) # HTML 사용
