@@ -19,3 +19,8 @@ matplotlib==3.7.1
 seaborn==0.12.2
 plotly==5.15.0
 yfinance==0.2.18
+webdriver-manager==4.0.1  # 추가
+trafilatura==1.6.2  # 추가
+psycopg2-binary==2.9.7  # 추가 (PostgreSQL 사용 시)
+selenium==4.15.2  # 추가
+lxml==4.9.3  # 추가 (trafilatura 의존성)

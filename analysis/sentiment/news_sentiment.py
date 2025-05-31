@@ -18,6 +18,12 @@ FINANCIAL_SENTIMENT_WORDS = {
     ]
 }
 
+# 필요한 NLTK 데이터 다운로드
+try:
+    nltk.data.find('vader_lexicon')
+except LookupError:
+    nltk.download('vader_lexicon')
+
 class NewsSentimentAnalyzer:
     def __init__(self):
         # NLTK 감성 분석기

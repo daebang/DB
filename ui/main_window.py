@@ -21,6 +21,8 @@ class MainWindow(QMainWindow):
     def __init__(self, controller):
         super().__init__()
         self.controller = controller
+        if self.controller:
+            self.controller.main_window_ref = self  # 추가
         self.setWindowTitle("통합 주식 분석 및 트레이딩 시스템")
         self.setGeometry(100, 100, 1600, 900) # 너비 증가 (필요에 따라 조정)
 

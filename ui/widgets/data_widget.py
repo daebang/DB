@@ -165,6 +165,7 @@ class DataWidget(QWidget):
         self.ml_confidence_label = QLabel("-") # 예: 75%
         self.target_price_label = QLabel("-") # 예: $155.50 (단기 목표가)
         self.overall_signal_label = QLabel("-") # 예: 매수 추천, 관망, 매도 고려
+        self.integrated_confidence_label = QLabel("-")  # 추가        
         self.analysis_summary_text = QTextEdit() # 여러 줄 분석 요약
         self.analysis_summary_text.setReadOnly(True)
         self.analysis_summary_text.setMinimumHeight(80)
@@ -190,7 +191,7 @@ class DataWidget(QWidget):
         form_layout.addRow(self.overall_signal_label) # 종합 판단은 크게 표시
         form_layout.addRow(QLabel("분석 요약:"))
         form_layout.addRow(self.analysis_summary_text)
-
+        form_layout.addRow("통합 분석 신뢰도:", self.integrated_confidence_label)  # 추가
 
         group_box.setLayout(form_layout)
         layout.addWidget(group_box)

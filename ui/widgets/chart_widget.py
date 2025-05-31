@@ -426,16 +426,18 @@ class ChartWidget(QWidget):
             self.clear_indicator_plots()
             return
 
+        # current_data가 없으면 업데이트하지 않음
+        if self.current_data is None or self.current_data.empty:
+            logger.warning("기본 차트 데이터가 없어 기술적 지표를 표시할 수 없습니다.")
+            return
+
         logger.debug(f"차트에 기술적 지표 업데이트 시작 (데이터 {len(data_with_indicators)}개)")
         
-        # 기존 지표 플롯 제거하지 않고 업데이트
-        # self.clear_indicator_plots()  # 주석 처리
-        
         # current_data와 동일한 인덱스 사용
-        if hasattr(self.current_data, 'x_index'):
+        if 'x_index' in self.current_data.columns:
             x_indices = self.current_data['x_index'].values
         else:
-            x_indices = np.arange(len(data_with_indicators))
+            x_indices = np.arange(len(self.current_data))
 
         # SMA 플롯
         sma_cols = [col for col in data_with_indicators.columns if col.startswith('SMA_')]
