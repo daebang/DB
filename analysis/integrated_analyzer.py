@@ -109,43 +109,64 @@ class IntegratedAnalyzer:
         news_sentiment_score = 0.0
         news_confidence_total = 0.0
         news_count = 0
+        
         if recent_news_df is not None and not recent_news_df.empty:
-            # 이미 NewsSentimentAnalyzer를 거친 DataFrame이라고 가정
-            # symbol 컬럼이 있다면 해당 심볼만 필터링 (이미 필터링된 데이터가 올 수도 있음)
+            # sentiment_score 컬럼 존재 여부 확인
+            if 'sentiment_score' not in recent_news_df.columns:
+                logger.warning(f"뉴스 데이터에 'sentiment_score' 컬럼이 없습니다. 감성 분석을 수행합니다.")
+                # 감성 분석 수행
+                if self.news_analyzer and hasattr(recent_news_df, 'text_for_analysis'):
+                    analyzed_news = []
+                    for idx, row in recent_news_df.iterrows():
+                        text = row.get('text_for_analysis') or row.get('description') or row.get('title', '')
+                        if text:
+                            sentiment_result = self.news_analyzer.analyze_sentiment(text, symbol)
+                            row['sentiment_score'] = sentiment_result.get('sentiment_score', 0.0)
+                            row['sentiment_label'] = sentiment_result.get('sentiment_label', 'neutral')
+                            row['confidence'] = sentiment_result.get('confidence', 0.5)
+                        else:
+                            row['sentiment_score'] = 0.0
+                            row['sentiment_label'] = 'neutral'
+                            row['confidence'] = 0.0
+                        analyzed_news.append(row)
+                    recent_news_df = pd.DataFrame(analyzed_news)
+            
+            # symbol 필터링
             if 'symbol' in recent_news_df.columns:
-                 symbol_news_df = recent_news_df[recent_news_df['symbol'] == symbol].copy()
-            else: # symbol 컬럼이 없다면, 이 뉴스는 모두 해당 symbol 관련으로 간주
-                 symbol_news_df = recent_news_df.copy()
-
-            if not symbol_news_df.empty:
-                news_sentiment_score = symbol_news_df['sentiment_score'].mean()
-                # confidence 컬럼이 있다면 사용, 없다면 0.5로 가정
-                if 'confidence' in symbol_news_df.columns:
-                    news_confidence_total = symbol_news_df['confidence'].sum()
-                else:
-                    news_confidence_total = 0.5 * len(symbol_news_df)
-
-                news_count = len(symbol_news_df)
-                analysis_result['news_analysis']['sentiment_score'] = round(news_sentiment_score, 3)
-                analysis_result['news_analysis']['summary'] = f"최근 {news_count}개 뉴스 평균 감성: {news_sentiment_score:.2f} ({self._get_sentiment_label_from_score(news_sentiment_score)})"
-                # 최근 주요 헤드라인 (최대 3개)
-                recent_headlines = []
-                for _, row in symbol_news_df.sort_values(by='published_at', ascending=False).head(3).iterrows():
-                    recent_headlines.append({
-                        'title': row['title'],
-                        'url': row['url'],
-                        'source': row.get('source_name', 'N/A'),
-                        'sentiment': row['sentiment_label'],
-                        'score': round(row['sentiment_score'], 2)
-                    })
-                analysis_result['news_analysis']['recent_headlines'] = recent_headlines
-                logger.debug(f"'{symbol}' 뉴스 분석: 평균 감성 {news_sentiment_score:.2f}, 뉴스 {news_count}개.")
+                symbol_news_df = recent_news_df[recent_news_df['symbol'] == symbol].copy()
             else:
-                analysis_result['news_analysis']['summary'] = f"'{symbol}' 관련 최근 뉴스 없음."
-                logger.debug(f"'{symbol}' 관련 최근 뉴스 없음.")
-        else:
-            logger.debug("입력된 뉴스 데이터 없음.")
+                symbol_news_df = recent_news_df.copy()
 
+            if not symbol_news_df.empty and 'sentiment_score' in symbol_news_df.columns:
+                # sentiment_score가 있는 행만 선택
+                valid_sentiment_df = symbol_news_df.dropna(subset=['sentiment_score'])
+                if not valid_sentiment_df.empty:
+                    news_sentiment_score = valid_sentiment_df['sentiment_score'].mean()
+                    if 'confidence' in valid_sentiment_df.columns:
+                        news_confidence_total = valid_sentiment_df['confidence'].sum()
+                    else:
+                        news_confidence_total = 0.5 * len(valid_sentiment_df)
+                    news_count = len(valid_sentiment_df)
+                    
+                    analysis_result['news_analysis']['sentiment_score'] = round(news_sentiment_score, 3)
+                    analysis_result['news_analysis']['summary'] = f"최근 {news_count}개 뉴스 평균 감성: {news_sentiment_score:.2f} ({self._get_sentiment_label_from_score(news_sentiment_score)})"
+                    # 최근 주요 헤드라인 (최대 3개)
+                    recent_headlines = []
+                    for _, row in symbol_news_df.sort_values(by='published_at', ascending=False).head(3).iterrows():
+                        recent_headlines.append({
+                            'title': row.get('title', 'N/A'),
+                            'url': row.get('url', ''),
+                            'source': row.get('source_name', row.get('source', {}).get('name', 'N/A') if isinstance(row.get('source'), dict) else 'N/A'),
+                            'sentiment': row.get('sentiment_label', 'neutral'),
+                            'score': round(row.get('sentiment_score', 0.0), 2)
+                        })
+                    analysis_result['news_analysis']['recent_headlines'] = recent_headlines
+                    logger.debug(f"'{symbol}' 뉴스 분석: 평균 감성 {news_sentiment_score:.2f}, 뉴스 {news_count}개.")
+                else:
+                    analysis_result['news_analysis']['summary'] = f"'{symbol}' 관련 최근 뉴스 없음."
+                    logger.debug(f"'{symbol}' 관련 최근 뉴스 없음.")
+            else:
+                logger.debug("입력된 뉴스 데이터 없음.")
 
         # 2. 경제 지표 영향 분석
         economic_impact_score = 0.0

@@ -1,15 +1,21 @@
 {
-	"database": {
-        "host": null
+    "database": {
+        "type": "sqlite",
+        "host": null,
+        "port": 5432,
+        "database": "trading_system_default.db",
+        "username": null,
+        "password": null,
+        "echo": false
     },
     "api": {
-        "alpha_vantage_key": "WAHXX6WWQE28F5SV",
-        "news_api_key": "b960d3db82d64857b691bfd175916df7",
+        "alpha_vantage_key": "",
+        "news_api_key": "",
         "broker_api_key": "",
         "broker_secret": ""
     },
     "trading": {
-        "max_position_size_percent": 0.1,
+        "max_position_size": 0.1,
         "stop_loss_percent": 0.05,
         "take_profit_percent": 0.15,
         "risk_free_rate": 0.02,
