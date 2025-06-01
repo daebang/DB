@@ -286,54 +286,98 @@ class ChartWidget(QWidget):
 
         logger.debug(f"{self.symbol} 과거 데이터 수신 ({len(data_df)}개), 차트 업데이트 시작 (원본 데이터)")
 
-        # yfinance 원본 데이터 (DatetimeIndex, 대문자 컬럼)를 내부 형식으로 변환
-        processed_df = data_df.copy()
-        if not isinstance(processed_df.index, pd.DatetimeIndex):
-            # 만약 data_df가 예상과 다른 형식으로 들어올 경우에 대한 방어 코드
-            if 'Date' in processed_df.columns and isinstance(processed_df['Date'], pd.Timestamp): # 또는 Datetime
-                 processed_df.set_index('Date', inplace=True)
-            elif 'timestamp' in processed_df.columns and isinstance(processed_df['timestamp'], (pd.Timestamp, pd.DatetimeIndex)):
-                 processed_df.set_index(pd.to_datetime(processed_df['timestamp']), inplace=True)
-            else:
-                logger.error(f"{self.symbol} 차트 데이터에 유효한 DatetimeIndex 또는 'timestamp' 컬럼이 없습니다.")
-                self.current_data = None
-                self.clear_chart_items()
-                self.price_plot.setTitle(f"{self.symbol} ({self.timeframe_combo.currentText()}) - 시간 데이터 형식 오류")
-                return
-
-        processed_df['timestamp'] = processed_df.index.astype(np.int64) // 10**9 # Unix timestamp (초)
-        # 컬럼명 소문자로 통일 (CandlestickItem 등에서 사용)
-        rename_map = {'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': 'close', 'Volume': 'volume'}
-        processed_df.rename(columns=rename_map, inplace=True, errors='ignore')
-
-        # 필요한 컬럼 확인
-        required_cols = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
-        if not all(col in processed_df.columns for col in required_cols):
-            logger.error(f"{self.symbol} 차트 데이터에 필수 컬럼 {required_cols} 중 일부가 누락되었습니다. 현재 컬럼: {processed_df.columns.tolist()}")
-            self.current_data = None
-            self.clear_chart_items()
-            self.price_plot.setTitle(f"{self.symbol} ({self.timeframe_combo.currentText()}) - 데이터 컬럼 오류")
+        if data_df is None or data_df.empty:
+            logger.warning(f"{self.symbol}에 대한 과거 데이터가 비어있습니다. (ChartWidget)")
+            # ... (existing empty data handling) ...
             return
 
-        self.current_data = processed_df.sort_values(by='timestamp')
-        # x_index는 _redraw_base_chart에서 current_data에 추가됩니다.
+        if data_df is None or data_df.empty:
+            logger.warning(f"{self.symbol}에 대한 과거 데이터가 비어있습니다. (ChartWidget)")
+            self.current_data = None 
+            self.current_data_with_ta = None 
+            self.clear_chart_items(clear_indicators=True) 
+            self.price_plot.setTitle(f"{self.symbol} ({self.timeframe_combo.currentText()}) - 데이터 없음")
+            self.hide_crosshair()
+            return
 
-        self._redraw_base_chart() # 기본 차트(캔들/라인, 거래량) 먼저 그림
-        # ... (중략) ...
-        if self.current_data is not None and not self.current_data.empty and 'x_index' in self.current_data.columns:
-            min_idx = self.current_data['x_index'].min()
-            max_idx = self.current_data['x_index'].max()
-            # X축 범위는 인덱스 기준으로 설정
+        logger.debug(f"{self.symbol} 과거 데이터 수신 ({len(data_df)}개), 차트 업데이트 시작 (원본 데이터) (ChartWidget)")
+        processed_df = data_df.copy()
+
+        # Ensure processed_df has a DatetimeIndex
+        if isinstance(processed_df.index, pd.DatetimeIndex):
+            if processed_df.index.tz is not None:
+                processed_df.index = processed_df.index.tz_convert(None)
+        elif 'timestamp' in processed_df.columns:
+            if pd.api.types.is_datetime64_any_dtype(processed_df['timestamp']):
+                logger.debug(f"'{self.symbol}' 차트 데이터: 'timestamp' 컬럼이 이미 datetime64 타입입니다. 인덱스로 설정합니다.")
+                processed_df.set_index(pd.to_datetime(processed_df['timestamp']), inplace=True)
+            elif pd.api.types.is_numeric_dtype(processed_df['timestamp']):
+                logger.debug(f"'{self.symbol}' 차트 데이터: 'timestamp' 컬럼이 숫자형입니다. Unix 초로 간주하여 DatetimeIndex로 변환합니다.")
+                # Set the index. The original 'timestamp' column is consumed. The new index might be named 'timestamp'.
+                processed_df.set_index(pd.to_datetime(processed_df['timestamp'], unit='s', errors='coerce'), inplace=True)
+            else:
+                logger.warning(f"'{self.symbol}' 차트 데이터: 'timestamp' 컬럼이 알 수 없는 타입입니다. 일반 변환 시도.")
+                processed_df.set_index(pd.to_datetime(processed_df['timestamp'], errors='coerce'), inplace=True)
+            
+            if processed_df.index.hasnans:
+                logger.warning(f"'{self.symbol}' 차트 데이터: timestamp 변환 후 NaT 발생. 해당 행 제거.")
+                processed_df = processed_df[~processed_df.index.isna()]
+
+        elif 'Date' in processed_df.columns and pd.api.types.is_datetime64_any_dtype(processed_df['Date']):
+            logger.debug(f"'{self.symbol}' 차트 데이터: 'Date' 컬럼을 DatetimeIndex로 사용합니다.")
+            processed_df.set_index(pd.to_datetime(processed_df['Date']), inplace=True)
+            if processed_df.index.hasnans:
+                processed_df = processed_df[~processed_df.index.isna()]
+        else:
+            logger.error(f"{self.symbol} 차트 데이터에 유효한 DatetimeIndex 또는 변환 가능한 'timestamp'/'Date' 컬럼이 없습니다.")
+            self.current_data = None; self.clear_chart_items(); self.price_plot.setTitle(f"{self.symbol} ({self.timeframe_combo.currentText()}) - 시간 데이터 형식 오류"); return
+
+        if not isinstance(processed_df.index, pd.DatetimeIndex) or processed_df.empty:
+            logger.error(f"{self.symbol} 차트 데이터: DatetimeIndex 설정에 실패했거나 데이터가 비어있습니다.")
+            self.current_data = None; self.clear_chart_items(); self.price_plot.setTitle(f"{self.symbol} ({self.timeframe_combo.currentText()}) - DatetimeIndex 오류"); return
+            
+        # If the index is now named 'timestamp', rename it to prevent conflict with the upcoming 'timestamp' column.
+        if processed_df.index.name == 'timestamp':
+            processed_df.index.name = None # Clear the index name or set to something like 'datetime_index'
+
+        rename_map_ohlcv = {'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': 'close', 'Volume': 'volume'}
+        processed_df.rename(columns=lambda c: rename_map_ohlcv.get(c, c.lower()), inplace=True)
+
+        # Add a 'timestamp' column (integer Unix seconds) for internal ChartWidget use.
+        # Now there should be no conflict as the index (if it was named 'timestamp') has been renamed.
+        processed_df['timestamp_col_int'] = (processed_df.index.astype(np.int64) // 10**9).astype(int) # Use a different name temporarily
+        # If the crosshair/other logic strictly needs a column named 'timestamp':
+        if 'timestamp' in processed_df.columns and processed_df['timestamp'].dtype != np.int64 : # If a 'timestamp' column already exists and is not our int version
+             del processed_df['timestamp'] # remove it before adding the new one
+        processed_df.rename(columns={'timestamp_col_int': 'timestamp'}, inplace=True)
+
+
+        required_cols = ['open', 'high', 'low', 'close', 'volume', 'timestamp'] 
+        if not all(col in processed_df.columns for col in required_cols):
+            missing = [col for col in required_cols if col not in processed_df.columns]
+            logger.error(f"{self.symbol} 차트 데이터에 필수 컬럼 {missing} 중 일부가 누락되었습니다. 현재 컬럼: {processed_df.columns.tolist()}")
+            self.current_data = None; self.clear_chart_items(); self.price_plot.setTitle(f"{self.symbol} ({self.timeframe_combo.currentText()}) - 데이터 컬럼 오류"); return
+
+        # Sort by the DatetimeIndex itself, which is usually the desired chronological order.
+        # The 'timestamp' column will be sorted accordingly.
+        self.current_data = processed_df.sort_index() 
+        # self.current_data = processed_df.sort_values(by='timestamp') # This should now work if you prefer sorting by the int column
+
+        self._redraw_base_chart()
+        if self.current_data_with_ta is not None and not self.current_data_with_ta.empty:
+             self.update_technical_indicators_on_chart(self.current_data_with_ta)
+
+        if self.current_data is not None and not self.current_data.empty and 'timestamp' in self.current_data.columns: # Check the column
+            # x_indices (0, 1, 2, ...) are used for plotting, not raw timestamps
+            min_idx = self.current_data.reset_index(drop=True).index.min() # Use integer index for range
+            max_idx = self.current_data.reset_index(drop=True).index.max()
             self.price_plot.setXRange(min_idx, max_idx, padding=0.02)
             self.volume_plot.setXRange(min_idx, max_idx, padding=0.02)
-
-            # Y축은 지표 추가 후 다시 autoRange 할 수 있음
             self.price_plot.enableAutoRange(axis='y')
             self.volume_plot.enableAutoRange(axis='y')
         else:
             self.price_plot.autoRange()
             self.volume_plot.autoRange()
-
 
     def _redraw_base_chart(self):
         self.clear_chart_items(clear_indicators=False) # 기본 차트 아이템 클리어
@@ -535,77 +579,73 @@ class ChartWidget(QWidget):
             item_dict.clear()
         # logger.debug("모든 기술적 지표 플롯 제거됨")
 
-    def on_mouse_moved_on_price_plot(self, pos_arg_from_signal): # 인자 이름 변경
-        """가격 차트 위에서 마우스가 움직일 때 호출됩니다. pos_arg_from_signal은 (QPointF,) 형태의 튜플입니다."""
+    def on_mouse_moved_on_price_plot(self, pos_arg_from_signal):
         if self.current_data is None or self.current_data.empty:
             self.hide_crosshair()
             return
 
-        # pos_arg_from_signal이 튜플이고, 그 첫번째 요소가 QPointF인지 확인
         if not isinstance(pos_arg_from_signal, tuple) or not pos_arg_from_signal:
             logger.warning(f"on_mouse_moved_on_price_plot: 예상치 못한 인자 타입 또는 빈 튜플: {pos_arg_from_signal}")
             self.hide_crosshair()
             return
         
-        scene_pos_qpointf = pos_arg_from_signal[0] # 튜플의 첫 번째 요소가 QPointF
+        scene_pos_qpointf = pos_arg_from_signal[0]
         if not isinstance(scene_pos_qpointf, QPointF):
             logger.warning(f"on_mouse_moved_on_price_plot: 튜플의 요소가 QPointF가 아님: {scene_pos_qpointf}")
             self.hide_crosshair()
             return
 
-        scene_rect = self.price_plot.sceneBoundingRect()
-        if not scene_rect.contains(scene_pos_qpointf):
+        # 가격 플롯의 ViewBox 가져오기
+        vb = self.price_plot.getViewBox()
+        if not vb.sceneBoundingRect().contains(scene_pos_qpointf): # 마우스가 가격 플롯 영역 밖에 있으면 숨김
             self.hide_crosshair()
             return
 
-        vb = self.price_plot.getViewBox()
         mouse_point_in_view = vb.mapSceneToView(scene_pos_qpointf)
-        mouse_x, mouse_y = mouse_point_in_view.x(), mouse_point_in_view.y()
+        mouse_x_view = mouse_point_in_view.x() # View 좌표계의 X값 (차트의 X축 값, 여기서는 인덱스)
+        mouse_y_view = mouse_point_in_view.y() # View 좌표계의 Y값 (차트의 Y축 값, 가격)
 
-        self.v_line.setPos(mouse_x)
-        self.h_line.setPos(mouse_y)
+        self.v_line.setPos(mouse_x_view)
+        self.h_line.setPos(mouse_y_view)
         self.v_line.show()
         self.h_line.show()
 
-        if 'timestamp' not in self.current_data.columns:
-            self.hide_crosshair()
-            return
-            
-        x_data = self.current_data['timestamp'].values
-        if len(x_data) == 0:
-            self.hide_crosshair()
-            return
+        # self.current_data는 DatetimeIndex를 가지고 있고, 'timestamp' 컬럼은 int Unix 초를 가짐.
+        # X축은 CustomDateAxisItem 때문에 실제로는 self.current_data.reset_index().index (0, 1, 2...) 기준으로 그려짐.
+        # 따라서 mouse_x_view는 이 0, 1, 2... 스케일의 값이어야 함.
 
-        # X축 범위 벗어났는지 체크 (mouse_x는 view 좌표계의 x값)
-        view_x_min, view_x_max = vb.viewRange()[0]
-        if not (view_x_min <= mouse_x <= view_x_max): # mouse_x가 현재 보이는 x축 범위 내에 있는지
-             self.price_text_item.hide()
-             # self.hide_crosshair() # 크로스 라인은 유지하고 텍스트만 숨길 수도 있음
-             return
-
-        index = np.abs(x_data - mouse_x).argmin()
+        # 가장 가까운 데이터 포인트의 인덱스 찾기
+        # mouse_x_view는 플롯 아이템의 x 좌표 (여기서는 0부터 시작하는 정수 인덱스)
+        # _redraw_base_chart에서 x_indices = np.arange(len(self.current_data))를 사용했으므로,
+        # mouse_x_view를 반올림하여 가장 가까운 정수 인덱스를 얻음.
+        index = int(round(mouse_x_view))
 
         if not (0 <= index < len(self.current_data)):
+            self.hide_crosshair() # price_text_item도 숨겨짐
+            return
+        
+        # self.current_data는 DatetimeIndex를 가짐. iloc으로 접근.
+        try:
+            data_point = self.current_data.iloc[index]
+        except IndexError:
             self.hide_crosshair()
             return
 
-        data_point = self.current_data.iloc[index]
+        # 날짜 문자열 생성: data_point.name은 DatetimeIndex의 해당 인덱스 값 (Timestamp 객체)
+        dt_object = data_point.name # DatetimeIndex에서 가져온 Timestamp 객체
         timeframe = self.timeframe_combo.currentText()
         
-        dt_object = pd.to_datetime(data_point['timestamp'], unit='s')
-        if '일' in timeframe or '주' in timeframe or '월' in timeframe:
+        if '일' in timeframe or '주' in timeframe or '월' in timeframe: # 일/주/월봉
             date_str = dt_object.strftime('%Y-%m-%d')
-        else: # 분봉, 시간봉
+        else: # 분봉, 시간봉 등
             date_str = dt_object.strftime('%Y-%m-%d %H:%M')
 
-
-        o = data_point.get('open', np.nan) # get으로 안전하게 접근
+        o = data_point.get('open', np.nan)
         h = data_point.get('high', np.nan)
         l = data_point.get('low', np.nan)
         c = data_point.get('close', np.nan)
         v = data_point.get('volume', np.nan)
 
-        # HTML 텍스트 생성 (값이 NaN일 경우 '-' 표시)
         def format_val(val, precision=2, is_volume=False):
             if pd.isna(val): return "-"
             return f"{val:,.{precision}f}" if not is_volume else f"{val:,.0f}"
@@ -615,45 +655,40 @@ class ChartWidget(QWidget):
                         O: <span style='color:#FFD700;'>{format_val(o)}</span> H: <span style='color:#80FF80;'>{format_val(h)}</span><br>
                         L: <span style='color:#FF8080;'>{format_val(l)}</span> C: <span style='color:#80D0FF;'>{format_val(c)}</span><br>
                         Vol: <span style='color:#C0C0C0;'>{format_val(v, is_volume=True)}</span><br>
-                        Y(가격): <span style='color:#C0C0C0;'>{mouse_y:.2f}</span>
+                        X(idx): <span style='color:#C0C0C0;'>{index} ({mouse_x_view:.2f})</span> Y(가격): <span style='color:#C0C0C0;'>{mouse_y_view:.2f}</span>
                         </div>"""
         self.price_text_item.setHtml(html_text)
         
-        # TextItem 위치 조정
-        view_range = vb.viewRange()
-        text_anchor_x = mouse_x
-        text_anchor_y = mouse_y
+        view_range_x = vb.viewRange()[0] # 현재 보이는 X축 범위 (인덱스 기준)
+        text_anchor_x_view = mouse_x_view # 마우스 X 위치 (인덱스 기준)
+        text_anchor_y_view = mouse_y_view # 마우스 Y 위치 (가격 기준)
 
-        # TextItem의 예상 너비/높이 (대략적인 값, 실제로는 그려봐야 알 수 있음)
-        est_text_width_pixels = 150 # 예시
-        est_text_height_pixels = 80 # 예시
-        # 픽셀을 뷰 좌표계 단위로 변환 (대략적)
-        pixel_width_in_view = vb.pixelWidth()
-        pixel_height_in_view = vb.pixelHeight()
+        # TextItem의 예상 너비 (뷰 좌표계 단위, 대략적)
+        # 이 부분은 실제 TextItem 크기에 따라 동적으로 계산하거나, 고정 오프셋 사용이 더 간단할 수 있음
+        est_text_width_pixels = 150 
+        pixel_width_in_view = vb.pixelWidth() if vb.pixelWidth() > 0 else 0.00001 # 0 방지
         est_text_width_view = est_text_width_pixels * pixel_width_in_view
-        # est_text_height_view = est_text_height_pixels * pixel_height_in_view
-
-
-        # 마우스 오른쪽으로 일정 간격만큼 이동시켜 표시
-        x_offset = (view_range[0][1] - view_range[0][0]) * 0.01 # 뷰 너비의 1%
-
-        if (text_anchor_x + x_offset + est_text_width_view) > view_range[0][1]: # 오른쪽 경계 침범 시
-            self.price_text_item.setAnchor((1,1)) # 오른쪽 상단 기준
-            text_anchor_x = mouse_x - x_offset
-        else:
-            self.price_text_item.setAnchor((0,1)) # 왼쪽 상단 기준
-            text_anchor_x = mouse_x + x_offset
         
-        self.price_text_item.setPos(text_anchor_x, text_anchor_y)
+        x_offset_view = (view_range_x[1] - view_range_x[0]) * 0.02 # 뷰 너비의 2% 오프셋 (인덱스 단위)
+
+        # 텍스트 아이템이 오른쪽 경계를 벗어나는지 확인
+        if (text_anchor_x_view + x_offset_view + est_text_width_view) > view_range_x[1]:
+            # 오른쪽 경계 침범 시, 텍스트를 마우스 왼쪽에 표시
+            self.price_text_item.setAnchor((1,1)) # 앵커를 오른쪽 상단으로
+            final_text_pos_x = mouse_x_view - x_offset_view # 마우스보다 왼쪽으로
+        else:
+            # 기본적으로 마우스 오른쪽에 표시
+            self.price_text_item.setAnchor((0,1)) # 앵커를 왼쪽 상단으로
+            final_text_pos_x = mouse_x_view + x_offset_view # 마우스보다 오른쪽으로
+        
+        self.price_text_item.setPos(final_text_pos_x, text_anchor_y_view)
         self.price_text_item.show()
 
-
-    def hide_crosshair(self, event=None):
+    def hide_crosshair(self, event=None): # event 인자는 사용하지 않으므로 Optional 처리하거나 제거 가능
         if self.v_line: self.v_line.hide()
         if self.h_line: self.h_line.hide()
         if self.price_text_item: self.price_text_item.hide()
         # date_text_item은 현재 기본적으로 사용되지 않으므로, 초기화되었다면 숨김 처리
-        if hasattr(self, 'date_text_item') and self.date_text_item:
+        if hasattr(self, 'date_text_item') and self.date_text_item: # self.date_text_item이 None일 수 있으므로 체크
              self.date_text_item.hide()
-
-    # ... (나머지 코드)
+             

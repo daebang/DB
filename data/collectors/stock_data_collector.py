@@ -166,59 +166,72 @@ class StockDataCollector:
                 self.logger.warning(f"Tiingo: '{symbol}' 데이터 없음")
                 return None
             
-            # DataFrame 변환
             df = pd.DataFrame(data)
             
             if df.empty:
                 self.logger.warning(f"Tiingo: '{symbol}' 빈 데이터프레임")
                 return None
             
-            # 날짜 인덱스 설정
             df['date'] = pd.to_datetime(df['date'])
             df.set_index('date', inplace=True)
             
-            # 타임존 정보 제거 (pyqtgraph 호환성)
             if df.index.tz is not None:
                 df.index = df.index.tz_convert('UTC').tz_localize(None)
+
+            # Prioritize adjusted prices and ensure unique lowercase column names for internal use
+            # This will create the columns 'open', 'high', 'low', 'close', 'volume'
+            final_df_std_names = pd.DataFrame(index=df.index)
+
+            if 'adjOpen' in df.columns and df['adjOpen'].notna().any():
+                final_df_std_names['open'] = df['adjOpen']
+            elif 'open' in df.columns:
+                final_df_std_names['open'] = df['open']
+            else:
+                final_df_std_names['open'] = np.nan
+
+            if 'adjHigh' in df.columns and df['adjHigh'].notna().any():
+                final_df_std_names['high'] = df['adjHigh']
+            elif 'high' in df.columns:
+                final_df_std_names['high'] = df['high']
+            else:
+                final_df_std_names['high'] = np.nan
+
+            if 'adjLow' in df.columns and df['adjLow'].notna().any():
+                final_df_std_names['low'] = df['adjLow']
+            elif 'low' in df.columns:
+                final_df_std_names['low'] = df['low']
+            else:
+                final_df_std_names['low'] = np.nan
+
+            if 'adjClose' in df.columns and df['adjClose'].notna().any():
+                final_df_std_names['close'] = df['adjClose']
+            elif 'close' in df.columns:
+                final_df_std_names['close'] = df['close']
+            else:
+                final_df_std_names['close'] = np.nan
             
-            # 컬럼명 매핑 (Tiingo -> yfinance 형식)
-            df.rename(columns={
-                'open': 'Open',
-                'high': 'High',
-                'low': 'Low',
-                'close': 'Close',
-                'volume': 'Volume',
-                'adjOpen': 'Open',  # 조정 가격 사용
-                'adjHigh': 'High',
-                'adjLow': 'Low',
-                'adjClose': 'Close',
-                'adjVolume': 'Volume'
-            }, inplace=True)
-            
-            # 필요한 컬럼만 선택
-            required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
-            df = df[required_cols]
-            
-            # NaN 제거
-            df.dropna(subset=required_cols, how='all', inplace=True)
+            if 'adjVolume' in df.columns and df['adjVolume'].notna().any():
+                final_df_std_names['volume'] = df['adjVolume']
+            elif 'volume' in df.columns:
+                final_df_std_names['volume'] = df['volume']
+            else:
+                final_df_std_names['volume'] = np.nan
+
+            df = final_df_std_names # df now has unique 'open', 'high', ..., and DatetimeIndex 'date'
+
+            required_cols_lower = ['open', 'high', 'low', 'close', 'volume']
+            df.dropna(subset=required_cols_lower, how='all', inplace=True)
             
             if df.empty:
-                self.logger.warning(f"Tiingo: '{symbol}' 유효한 데이터 없음")
+                self.logger.warning(f"Tiingo: '{symbol}' 유효한 데이터 없음 (after selection & dropna)")
                 return None
             
-            # 타임스탬프 추가
-            df['timestamp'] = df.index.astype(np.int64) // 10**9  # Unix timestamp (초)
+            # Add 'timestamp' column from index (Unix seconds, integer)
+            df['timestamp'] = (df.index.astype(np.int64) // 10**9).astype(int)
             
-            # 소문자 컬럼명으로 변환 (내부 사용)
-            df.rename(columns={
-                'Open': 'open',
-                'High': 'high',
-                'Low': 'low',
-                'Close': 'close',
-                'Volume': 'volume'
-            }, inplace=True)
-            
-            df_to_return = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']].copy()
+            # Ensure required columns are present and select them, then reset_index
+            # This results in a DataFrame with columns: 'timestamp', 'open', 'high', 'low', 'close', 'volume'
+            df_to_return = df[['timestamp'] + required_cols_lower].reset_index(drop=True)
             
             self.logger.info(f"Tiingo: '{symbol}' ({timeframe}) 과거 데이터 {len(df_to_return)}개 수집 완료.")
             return df_to_return
@@ -226,7 +239,7 @@ class StockDataCollector:
         except Exception as e:
             self.logger.error(f"Tiingo로 '{symbol}' 과거 데이터 수집 중 오류: {e}", exc_info=True)
             return None
-    
+            
     def get_realtime_quote(self, symbol: str) -> Optional[Dict[str, Any]]:
         """
         현재 가격 정보 조회
