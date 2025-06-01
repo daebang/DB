@@ -81,8 +81,8 @@ class MainController(QObject):
             self.logger.info("데이터베이스 매니저 초기화 완료")
         except Exception as e:
             self.logger.critical(f"데이터베이스 매니저 초기화 실패: {e}", exc_info=True)
-            self.db_manager = None
-        self.stock_collector = StockDataCollector(settings.api_config) # yfinance 기반 Collector
+            self.db_manager = None        
+        self.stock_collector = StockDataCollector(settings.api_config) # Tiingo 기반 Collector
         self.news_sentiment_analyzer = NewsSentimentAnalyzer() # APIConfig 주입 고려
         self.news_collector = NewsCollector(settings.api_config)
         self.economic_calendar_collector = EconomicCalendarCollector() # api_config는 현재 불필요

@@ -186,7 +186,7 @@ class ChartWidget(QWidget):
         self.chart_type_combo.currentTextChanged.connect(self.redraw_chart)
 
         self.timeframe_combo = QComboBox()
-        self.timeframe_combo.addItems(['1일', '1주', '1개월', '1시간', '30분', '15분', '5분', '1분']) # 순서 변경
+        self.timeframe_combo.addItems(['1일', '1주', '1개월']) # Tiingo는 일봉 데이터만 지원
         self.timeframe_combo.currentTextChanged.connect(self.on_timeframe_or_symbol_changed)
 
         controls_layout.addWidget(QLabel('차트:'))

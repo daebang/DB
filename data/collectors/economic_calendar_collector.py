@@ -153,6 +153,9 @@ class EconomicCalendarCollector:
 
         try:
             driver = self._setup_driver()
+            if driver is None: # If setup failed, driver will be None
+                logger.error("WebDriver setup failed, cannot collect data.")
+                return events # Return empty list
             current_date = start_date
             while current_date <= end_date:
                 date_str_url = current_date.strftime('%Y-%m-%d') # URL용 날짜 포맷
@@ -323,8 +326,15 @@ class EconomicCalendarCollector:
             logger.error(f"Selenium 전체 수집 과정 중 오류 발생: {e_main}", exc_info=True)
         finally:
             if driver:
-                driver.quit()
-                logger.info("WebDriver 종료됨.")
+                try:
+                    logger.info("Attempting to quit WebDriver...")
+                    driver.quit()
+                    logger.info("WebDriver quit successfully.")
+                except Exception as e_quit:
+                    logger.error(f"Error quitting WebDriver: {e_quit}", exc_info=True)
+                    # Consider more drastic measures if quit fails, e.g., trying to kill the process
+            else:
+                logger.info("WebDriver was not initialized or already quit, no action in finally block.")
         return events
 
     def _parse_row(self, row_element, event_date_obj: datetime) -> Optional[Dict]:

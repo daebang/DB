@@ -367,8 +367,11 @@ class MainWindow(QMainWindow):
 
         if reply == QMessageBox.Yes:
             logger.info("애플리케이션 종료 시작")
+            if hasattr(self, 'update_timer') and self.update_timer: # Check if timer exists
+                self.update_timer.stop()
+                logger.info("UI update_timer 중지됨.")
             if self.controller:
-                self.controller.stop() # 컨트롤러의 정리 작업 수행
+                self.controller.stop()
             event.accept()
         else:
             logger.info("애플리케이션 종료 취소")

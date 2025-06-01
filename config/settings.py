@@ -21,9 +21,10 @@ class DatabaseConfig:
 @dataclass
 class APIConfig:
     alpha_vantage_key: str = ""
-    news_api_key: str = ""
+    news_api_key: str = "b960d3db82d64857b691bfd175916df7"
     broker_api_key: str = "" # 실제 거래용 API
     broker_secret: str = ""  # 실제 거래용 Secret
+    tiingo_api_key: str = "aa49ca6079b56a4d1bcab4be7f91f02dbeee304c"  # Tiingo API 키 추가
     # 추가 API 키 (예: FRED, 경제지표용 등)
     # fred_api_key: str = ""
 
