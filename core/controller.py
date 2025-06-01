@@ -20,6 +20,7 @@ from config.settings import Settings
 from analysis.technical.indicators import add_all_selected_indicators
 from analysis.integrated_analyzer import IntegratedAnalyzer # 추가
 from analysis.sentiment.news_sentiment import NewsSentimentAnalyzer # IntegratedAnalyzer에 주입하기 위해
+from analysis.prediction.timeframe_predictor import TimeframePredictor # 만약 위 파일이 analysis/prediction 폴더로 이동한다면
 
 
 
@@ -346,6 +347,7 @@ class MainController(QObject):
                     self.logger.info(f"{task_display_name}: DB에 데이터 없음. API 호출 진행.")
         
         self._dispatch_api_task(request_key, task_display_name, symbol, timeframe)
+		
     def _dispatch_api_task(self, request_key:str, task_display_name:str, symbol:str, timeframe:str):
         """API 호출 작업을 WorkflowEngine에 제출합니다."""
         if self._is_task_active(request_key):
@@ -740,6 +742,7 @@ class MainController(QObject):
         with self._cache_lock:
             data = self._data_cache.get(f"{symbol}_realtime")
             return dict(data) if data is not None and isinstance(data, dict) else None
+			
     def request_symbol_analysis(self, symbol: str, timeframe: str, data_df: Optional[pd.DataFrame] = None):
         task_display_name = f"{symbol}({timeframe}) AI 분석"
         request_key = f"analyze_symbol_{symbol}_{timeframe.replace(' ','_')}" # 고유한 ID 생성
@@ -780,68 +783,117 @@ class MainController(QObject):
 
 
     def _task_run_analysis(self, symbol: str, data_df_with_ta: pd.DataFrame, task_display_name: str, request_key: str) -> Optional[Dict]:
-        self.logger.debug(f"태스크 시작: {task_display_name} (TA 데이터 컬럼: {data_df_with_ta.columns.tolist()[:5]}...)")
-        analysis_output = {'ml_prediction': None, 'integrated_analysis': None, 'overall_signal': '데이터 부족', 'signal_reason': ''}
+        self.logger.info(f"태스크 시작: {task_display_name} ({symbol}) - AI 기간별 예측 실행.")
+        self.task_feedback_signal.emit(task_display_name, "AI 기간별 예측 분석 중...")
+
         try:
-            self.task_feedback_signal.emit(task_display_name, "AI 모델 예측 및 통합 분석 중...")
+            # 0. TimeframePredictor 인스턴스 생성
+            # TimeframePredictor는 프로젝트 루트에 있다고 가정. 아니라면 경로 조정.
+            # 예: from analysis.timeframe_predictor import TimeframePredictor
+            predictor = TimeframePredictor(symbol=symbol)
 
-            # 1. ML 모델 예측
-            prediction = self.model_manager.predict(symbol, data_df_with_ta.copy())
-            if prediction:
-                analysis_output['ml_prediction'] = prediction
-                self.logger.debug(f"{task_display_name} - ML 예측 완료: {prediction}")
+            # 1. TimeframePredictor에 필요한 데이터 준비
+            # data_df_with_ta는 timestamp 인덱스와 TA 컬럼들을 가지고 있음.
+            
+            #   1.1 historical_data: 원본 OHLCV (TimeframePredictor는 내부적으로 특징 생성 시 사용)
+            #       data_df_with_ta에서 TA를 제외한 원본 OHLCV 컬럼만 추출하거나,
+            #       _process_and_emit_historical_data에서 원본 yf 데이터를 캐싱했다면 그것을 사용.
+            #       여기서는 data_df_with_ta에서 필요한 컬럼만 선택하여 전달.
+            ohlcv_cols = ['open', 'high', 'low', 'close', 'volume'] # 표준 소문자 컬럼명 가정
+            # data_df_with_ta의 인덱스가 'timestamp'인지 확인, 아니면 set_index('timestamp')
+            current_historical_data_df = data_df_with_ta.copy()
+            if not isinstance(current_historical_data_df.index, pd.DatetimeIndex) and 'timestamp' in current_historical_data_df.columns:
+                current_historical_data_df = current_historical_data_df.set_index('timestamp')
+            
+            # historical_data는 순수 OHLCV를 기대할 수 있으므로, TA 컬럼 제외 (선택적, TimeframePredictor 내부 처리 방식에 따라 다름)
+            # BaseTimeframePredictionModel.prepare_features가 'close'등을 직접 사용하므로,
+            # 여기서는 TA가 포함된 데이터를 historical_data로 넘겨도 prepare_features에서 알아서 처리할 것으로 기대.
+            # 또는, 명시적으로 OHLCV만 선택
+            # base_historical_data = current_historical_data_df[ohlcv_cols].copy()
 
-            # 2. 통합 분석을 위한 데이터 준비
-            # 뉴스 데이터는 캐시/DB에서 가져옴. request_key와 유사한 키 사용
-            news_cache_key = f"news_{symbol}_en" # 언어는 설정 또는 동적으로
+
+            #   1.2 technical_indicators: TA가 포함된 DataFrame
+            #       data_df_with_ta 자체가 이 역할을 할 수 있음. TimeframePredictor의
+            #       _prepare_unified_features가 이 데이터를 받아 TA 컬럼을 활용.
+            technical_indicators_df = current_historical_data_df.copy()
+
+
+            #   1.3 news_sentiment: 뉴스 데이터 (DataFrame 형태, sentiment_score 등 포함)
+            news_cache_key = f"news_{symbol}_en" # 언어는 설정 또는 동적으로 조정
             recent_news_list = self.get_cached_news_data(news_cache_key)
-            recent_news_for_symbol_df = pd.DataFrame(recent_news_list) if recent_news_list else pd.DataFrame()
-            if not recent_news_for_symbol_df.empty and 'published_at' in recent_news_for_symbol_df.columns:
-                 recent_news_for_symbol_df['published_at'] = pd.to_datetime(recent_news_for_symbol_df['published_at'], errors='coerce', utc=True)
-                 # IntegratedAnalyzer는 이미 분석된 sentiment_score 등을 기대할 수 있음
-                 # 만약 raw news list라면 여기서 sentiment 분석 필요
-                 # 여기서는 NewsCollector가 반환한 (또는 DB에 저장된) 데이터가 이미 분석되었다고 가정
-                 # 또는 self.news_sentiment_analyzer.analyze_news_batch(recent_news_list)를 호출하여 즉석 분석
+            news_sentiment_df = pd.DataFrame(recent_news_list) if recent_news_list else pd.DataFrame()
+            if not news_sentiment_df.empty and 'published_at' in news_sentiment_df.columns:
+                news_sentiment_df['published_at'] = pd.to_datetime(news_sentiment_df['published_at'], errors='coerce', utc=True)
+                # TimeframePredictor의 prepare_features가 news_sentiment를 날짜별로 집계하므로 DatetimeIndex 필요
+                if isinstance(news_sentiment_df.index, pd.DatetimeIndex): # 이미 DatetimeIndex면 그대로 사용
+                    pass
+                elif 'published_at' in news_sentiment_df.columns and news_sentiment_df['published_at'].notna().any():
+                    news_sentiment_df = news_sentiment_df.set_index('published_at').sort_index()
+                else: # DatetimeIndex 설정 불가 시 빈 DF 전달
+                    logger.warning(f"{symbol}: 뉴스 데이터에 유효한 published_at 정보가 없어 인덱싱 불가. 빈 DF로 처리.")
+                    news_sentiment_df = pd.DataFrame()
 
-            # 경제 지표 데이터 (향후 7일치, 중요도 1 이상)
-            upcoming_economic_events_df = self.get_cached_economic_calendar_data(copy=False) # 원본 참조 가능
-            if upcoming_economic_events_df is None:
-                upcoming_economic_events_df = pd.DataFrame()
+
+            #   1.4 economic_indicators: 경제 지표 데이터 (DataFrame 형태)
+            economic_indicators_df = self.get_cached_economic_calendar_data(copy=False) # 원본 참조 가능
+            if economic_indicators_df is None:
+                economic_indicators_df = pd.DataFrame()
+            elif not economic_indicators_df.empty and 'datetime' in economic_indicators_df.columns:
+                 # TimeframePredictor의 prepare_features가 economic_indicators를 날짜별로 집계하므로 DatetimeIndex 필요
+                if isinstance(economic_indicators_df.index, pd.DatetimeIndex):
+                    pass
+                elif 'datetime' in economic_indicators_df.columns and economic_indicators_df['datetime'].notna().any():
+                    economic_indicators_df = economic_indicators_df.set_index('datetime').sort_index()
+                else:
+                    logger.warning(f"{symbol}: 경제 지표 데이터에 유효한 datetime 정보가 없어 인덱싱 불가. 빈 DF로 처리.")
+                    economic_indicators_df = pd.DataFrame()
 
 
-            # 3. IntegratedAnalyzer 실행
-            integrated_analysis_result = self.integrated_analyzer.analyze_symbol_impact(
-                symbol=symbol,
-                recent_news_df=recent_news_for_symbol_df,
-                upcoming_economic_events_df=upcoming_economic_events_df,
-                current_price_data=self.get_cached_realtime_data(symbol),
-                historical_data_df=data_df_with_ta # TA 포함 데이터 전달
+            #   1.5 fundamental_data: 현재는 None으로 전달
+            fundamental_data_df = None
+
+            # 2. TimeframePredictor를 사용하여 예측 수행
+            # current_historical_data_df는 이미 timestamp를 인덱스로 가짐
+            predictions_data = predictor.predict_all_timeframes(
+                historical_data=current_historical_data_df, # 원본 데이터 (또는 ohlcv_cols만 선택한 데이터)
+                technical_indicators=technical_indicators_df, # TA 포함된 데이터
+                news_sentiment=news_sentiment_df,
+                economic_indicators=economic_indicators_df,
+                fundamental_data=fundamental_data_df
             )
 
-            if integrated_analysis_result:
-                analysis_output['integrated_analysis'] = integrated_analysis_result
-                analysis_output['overall_signal'] = integrated_analysis_result.get('short_term_outlook_label', 'N/A')
-                key_pos = integrated_analysis_result.get('key_positive_factors', [])
-                key_risk = integrated_analysis_result.get('key_risk_factors', [])
-                analysis_output['signal_reason'] = "; ".join(key_pos + key_risk)
-            else: # integrated_analysis_result가 None이거나 비었을 경우
-                analysis_output['integrated_analysis'] = {'summary': "통합 분석 데이터 부족 또는 오류"}
-
-
-            self.analysis_result_updated_signal.emit(symbol, analysis_output.copy())
-            self.task_feedback_signal.emit(task_display_name, "AI 분석 및 통합 분석 완료")
-            self.logger.info(f"{task_display_name} 완료. ML: {analysis_output.get('ml_prediction') != None}, 통합: {analysis_output.get('integrated_analysis') != None}")
-            return analysis_output
+            if predictions_data:
+                self.logger.info(f"{task_display_name} ({symbol}) - AI 기간별 예측 완료.")
+                # DataWidget의 update_analysis_display는 predictions_data 전체를 받도록 설계됨
+                self.analysis_result_updated_signal.emit(symbol, predictions_data.copy())
+                self.task_feedback_signal.emit(task_display_name, "AI 기간별 예측 분석 완료")
+                return predictions_data
+            else:
+                self.logger.warning(f"{task_display_name} ({symbol}) - AI 기간별 예측 결과 없음.")
+                # 빈 결과 또는 기본 메시지 UI 전달
+                default_empty_prediction = {
+                    'symbol': symbol, 'timestamp': datetime.now(), 'current_price': None,
+                    'timeframes': {}, 'overall_confidence': 0.0,
+                    'recommendation': {'action': '분석 불가', 'strength': '', 'reasoning': ['예측 모델 실행에 실패했거나 결과가 없습니다.'], 'risk_level': '높음', 'suggested_strategy': ''}
+                }
+                self.analysis_result_updated_signal.emit(symbol, default_empty_prediction)
+                self.task_feedback_signal.emit(task_display_name, "AI 기간별 예측 결과 없음")
+                return None
 
         except Exception as e:
-            self.logger.error(f"{task_display_name} 태스크 중 예외: {e}", exc_info=True)
-            self.task_feedback_signal.emit(task_display_name, f"분석 오류: {str(e)[:30]}...")
-            analysis_output['error'] = str(e)
-            self.analysis_result_updated_signal.emit(symbol, analysis_output.copy())
+            self.logger.error(f"{task_display_name} ({symbol}) 태스크 중 예외 발생: {e}", exc_info=True)
+            error_prediction_output = {
+                'symbol': symbol, 'timestamp': datetime.now(), 'current_price': None,
+                'timeframes': {}, 'overall_confidence': 0.0,
+                'recommendation': {'action': '오류 발생', 'strength': '', 'reasoning': [f'분석 중 오류 발생: {str(e)[:100]}...'], 'risk_level': '알수없음', 'suggested_strategy': ''},
+                'error': str(e)
+            }
+            self.analysis_result_updated_signal.emit(symbol, error_prediction_output)
+            self.task_feedback_signal.emit(task_display_name, f"AI 분석 오류: {str(e)[:30]}...")
             return None
         finally:
-            self._remove_active_task(request_key) # 작업 완료/실패 시 활성 목록에서 제거
-            self.logger.debug(f"태스크 종료: {task_display_name}")
+            self._remove_active_task(request_key)
+            self.logger.info(f"태스크 종료: {task_display_name} ({symbol})")
             
 
     def _on_task_started(self, event_data: Dict[str, Any]):

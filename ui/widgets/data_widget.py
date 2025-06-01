@@ -5,7 +5,7 @@ from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 import pandas as pd # 데이터 처리를 위해 추가
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List # List 추가
 
 logger = logging.getLogger(__name__)
 
@@ -40,9 +40,9 @@ class DataWidget(QWidget):
         self.sentiment_tab = self._create_sentiment_tab()
         self.tab_widget.addTab(self.sentiment_tab, "📰 뉴스") # 탭 이름 변경
 
-        # 예측 탭
-        self.prediction_tab = self._create_prediction_tab()
-        self.tab_widget.addTab(self.prediction_tab, "🤖 AI 분석") # 탭 이름 변경
+        # AI 분석 탭 (이전 '예측 탭')
+        self.ai_analysis_tab = self._create_ai_analysis_tab() # 메서드명 변경
+        self.tab_widget.addTab(self.ai_analysis_tab, "🤖 AI 분석")
 
         # 경제 지표 탭 (신규 추가 제안)
         self.economic_indicators_tab = self._create_economic_indicators_tab()
@@ -152,50 +152,65 @@ class DataWidget(QWidget):
         layout.addWidget(self.news_list_widget)
         return widget
 
-    def _create_prediction_tab(self):
-        """AI 예측 및 종합 판단 탭 생성"""
+    def _create_ai_analysis_tab(self): # 이전에 _create_prediction_tab 이었던 메서드
+        """AI 기반 종합 분석 결과를 표시하는 탭 생성"""
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.setContentsMargins(10,10,10,10)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10) # 그룹 간 간격 추가
 
-        group_box = QGroupBox("AI 기반 종합 분석 결과")
-        form_layout = QFormLayout()
+        # 기본 폰트 설정
+        default_font_size = "10pt" # QLabel 기본 폰트 크기
+        group_title_font_size = "11pt" # QGroupBox 제목 폰트 크기
+        recommendation_action_font_size = "16pt" # 추천 행동 레이블 폰트 크기
+        
+        # 종합 추천 섹션
+        recommendation_group = QGroupBox("AI 종합 투자 추천")
+        recommendation_group.setStyleSheet(f"QGroupBox {{ font-size: {group_title_font_size}; font-weight: bold; }}")
+        rec_layout = QFormLayout()
+        rec_layout.setSpacing(10) # 항목 간 간격 증가
+        rec_layout.setLabelAlignment(Qt.AlignLeft) # 레이블 왼쪽 정렬
 
-        self.ml_direction_label = QLabel("-") # 예: 상승, 하락, 보합
-        self.ml_confidence_label = QLabel("-") # 예: 75%
-        self.target_price_label = QLabel("-") # 예: $155.50 (단기 목표가)
-        self.overall_signal_label = QLabel("-") # 예: 매수 추천, 관망, 매도 고려
-        self.integrated_confidence_label = QLabel("-")  # 추가        
-        self.analysis_summary_text = QTextEdit() # 여러 줄 분석 요약
+        self.current_price_for_recommendation_label = QLabel("현재가(분석시점): -")
+        self.current_price_for_recommendation_label.setStyleSheet(f"font-size: {default_font_size}; color: #B0B0B0;")
+
+        # "추천 행동:" 텍스트를 가진 QLabel을 별도로 생성하여 스타일 적용
+        recommendation_action_title_label = QLabel("추천 행동:")
+        recommendation_action_title_label.setStyleSheet(f"font-size: {default_font_size}; font-weight: bold;")
+
+        self.recommendation_action_label = QLabel("-") 
+        self.recommendation_action_label.setStyleSheet(f"font-size: {recommendation_action_font_size}; font-weight: bold;") # 기본 색상은 update_analysis_display에서 설정
+
+        self.overall_confidence_label = QLabel("종합 신뢰도: -")
+        self.overall_confidence_label.setStyleSheet(f"font-size: {default_font_size};")
+
+        self.risk_level_label = QLabel("리스크 수준: -")
+        self.risk_level_label.setStyleSheet(f"font-size: {default_font_size};")
+        
+        rec_layout.addRow(self.current_price_for_recommendation_label)
+        rec_layout.addRow(recommendation_action_title_label, self.recommendation_action_label) # 제목 레이블과 값 레이블 분리
+        rec_layout.addRow(self.overall_confidence_label)
+        rec_layout.addRow(self.risk_level_label)
+        
+        recommendation_group.setLayout(rec_layout)
+        layout.addWidget(recommendation_group)
+
+        # 상세 분석 내용 섹션 (QTextEdit 사용)
+        analysis_details_group = QGroupBox("상세 분석 및 기간별 예측")
+        analysis_details_group.setStyleSheet(f"QGroupBox {{ font-size: {group_title_font_size}; font-weight: bold; }}")
+        details_layout = QVBoxLayout()
+        
+        self.analysis_summary_text = QTextEdit()
         self.analysis_summary_text.setReadOnly(True)
-        self.analysis_summary_text.setMinimumHeight(80)
+        self.analysis_summary_text.setMinimumHeight(300) # 상세 내용 표시 위해 높이 증가
+        self.analysis_summary_text.setStyleSheet(f"font-size: {default_font_size}; border: 1px solid #4A4A4A;") # 테두리 추가
 
-
-        label_font = QFont()
-        label_font.setPointSize(11)
-        self.ml_direction_label.setFont(label_font)
-        self.ml_confidence_label.setFont(label_font)
-        self.target_price_label.setFont(label_font)
-
-        signal_font = QFont()
-        signal_font.setPointSize(14)
-        signal_font.setBold(True)
-        self.overall_signal_label.setFont(signal_font)
-        self.overall_signal_label.setAlignment(Qt.AlignCenter)
-
-
-        form_layout.addRow("예측 방향 (ML):", self.ml_direction_label)
-        form_layout.addRow("신뢰도:", self.ml_confidence_label)
-        form_layout.addRow("AI 목표가 (참고):", self.target_price_label)
-        form_layout.addRow(QLabel("종합 판단:")) # 빈 라벨로 공간 확보
-        form_layout.addRow(self.overall_signal_label) # 종합 판단은 크게 표시
-        form_layout.addRow(QLabel("분석 요약:"))
-        form_layout.addRow(self.analysis_summary_text)
-        form_layout.addRow("통합 분석 신뢰도:", self.integrated_confidence_label)  # 추가
-
-        group_box.setLayout(form_layout)
-        layout.addWidget(group_box)
+        details_layout.addWidget(self.analysis_summary_text)
+        analysis_details_group.setLayout(details_layout)
+        layout.addWidget(analysis_details_group)
+        
         layout.addStretch()
+        widget.setLayout(layout) # 최종 레이아웃 설정 추가
         return widget
 
     def _create_economic_indicators_tab(self):
@@ -229,11 +244,8 @@ class DataWidget(QWidget):
         # 시간, 국가, 중요도, 실제, 예상, 이전 컬럼은 내용에 맞게 자동 조절
         for i in [0, 1, 2, 4, 5, 6]:
             header.setSectionResizeMode(i, QHeaderView.ResizeToContents)
-        # 이벤트 컬럼은 남은 공간을 모두 차지하도록 설정 (Stretch)
-        # header.setSectionResizeMode(3, QHeaderView.Stretch)
-        # 사용자가 직접 컬럼 너비를 조절할 수 있도록 Interactive 모드도 고려할 수 있습니다.
-        header.setSectionResizeMode(QHeaderView.Interactive) # 전체 컬럼에 적용
-
+        header.setSectionResizeMode(3, QHeaderView.Stretch) # 이벤트 컬럼 확장
+        
         self.economic_indicators_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.economic_indicators_table.setAlternatingRowColors(True) # 행 번갈아가며 색상
         self.economic_indicators_table.setSortingEnabled(True)
@@ -241,6 +253,7 @@ class DataWidget(QWidget):
 
         layout.addWidget(self.economic_indicators_table)
         return widget
+		
     def update_economic_indicators_display(self, economic_data_df: pd.DataFrame): # 메서드명 변경 및 인자 타입 명시
         """ 경제 지표 데이터를 받아 테이블에 표시 """
         if economic_data_df is None:
@@ -380,15 +393,18 @@ class DataWidget(QWidget):
         self.overall_sentiment_score_label.setText("-")
         self.overall_sentiment_trend_label.setText("-")
         self.news_count_label.setText("-")
+        self.positive_news_ratio_label.setText("-")
+        self.negative_news_ratio_label.setText("-")
+        self.overall_sentiment_score_label.setStyleSheet("")
+        self.overall_sentiment_trend_label.setStyleSheet("")
 
-
-        # AI 예측 탭
-        self.ml_direction_label.setText("-")
-        self.ml_confidence_label.setText("-")
-        self.target_price_label.setText("-")
-        self.overall_signal_label.setText("-")
-        self.overall_signal_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #E0E0E0;") # 기본색
-        self.analysis_summary_text.clear()
+        # AI 분석 탭 초기화
+        self.recommendation_action_label.setText("-")
+        self.recommendation_action_label.setStyleSheet("font-size: 18px; font-weight: bold;")
+        self.current_price_for_recommendation_label.setText("현재가: -")
+        self.overall_confidence_label.setText("종합 신뢰도: -")
+        self.risk_level_label.setText("리스크 수준: -")
+        self.analysis_summary_text.setHtml("") # HTML 내용도 클리어
 
 
         # 경제 지표 탭은 심볼 변경과 무관하므로 여기서는 초기화하지 않음.
@@ -396,6 +412,7 @@ class DataWidget(QWidget):
         #     self.economic_indicators_table.setRowCount(0) # 이 줄을 주석 처리하거나 삭제
        
         logger.debug("심볼 관련 데이터 위젯 탭 내용 초기화됨 (경제 지표 탭 제외).")
+		
     # --- MainWindow의 핸들러 함수들로부터 호출될 업데이트 메서드들 ---
     def update_realtime_quote_display(self, quote_data: dict):
         """ 실시간 호가 데이터를 받아 UI에 표시 (MainWindow에서 호출) """
@@ -419,10 +436,9 @@ class DataWidget(QWidget):
         self.high_label.setText(f"${quote_data.get('high', 0):.2f}")
         self.low_label.setText(f"${quote_data.get('low', 0):.2f}")
         self.prev_close_label.setText(f"${quote_data.get('previous_close', 0):.2f}")
-
-        # 시가총액 등 추가 정보 (API 응답에 따라)
-        # market_cap = quote_data.get('market_cap')
-        # self.market_cap_label.setText(f"${market_cap:,}" if market_cap else "-")
+        
+        market_cap = quote_data.get('market_cap')
+        self.market_cap_label.setText(f"${market_cap:,}" if market_cap else "-")
 
         retrieved_at = quote_data.get('retrieved_at')
         if retrieved_at and isinstance(retrieved_at, pd.Timestamp):
@@ -601,71 +617,150 @@ class DataWidget(QWidget):
             QDesktopServices.openUrl(QUrl(url))
 
 
-    def update_analysis_display(self, analysis_results: dict): # analysis_results는 Controller에서 오는 전체 결과
-        # ML 예측 부분
-        ml_pred = analysis_results.get('ml_prediction', {})
-        self.ml_direction_label.setText(str(ml_pred.get('action', '-')))
-        ml_conf = ml_pred.get('confidence', 0.0)
-        self.ml_confidence_label.setText(f"{ml_conf:.0%}" if ml_conf else "-")
-        target_p = ml_pred.get('target_price')
-        self.target_price_label.setText(f"${target_p:.2f}" if target_p else "-")
-        if ml_pred.get('action') == 'BUY': self.ml_direction_label.setStyleSheet("color: #4CAF50;")
-        elif ml_pred.get('action') == 'SELL': self.ml_direction_label.setStyleSheet("color: #F44336;")
-        else: self.ml_direction_label.setStyleSheet("")
+    def update_analysis_display(self, predictions_data: Dict[str, Any]):
+        """
+        TimeframePredictor로부터 받은 종합 예측 데이터를 UI에 표시합니다.
+        predictions_data는 timeframe_predictor.predict_all_timeframes()의 반환값입니다.
+        """
+        if not predictions_data or predictions_data.get('symbol') != self.symbol:
+            logger.warning(f"AI 분석 데이터가 없거나 심볼({predictions_data.get('symbol')}) 불일치 ({self.symbol}). UI 업데이트 건너뜀.")
+            # UI 초기화 또는 "데이터 없음" 메시지 표시
+            self.recommendation_action_label.setText("데이터 없음")
+            self.recommendation_action_label.setStyleSheet(f"font-size: {getattr(self, 'recommendation_action_font_size', '16pt')}; font-weight: bold; color: #AAAAAA;")
+            self.current_price_for_recommendation_label.setText("현재가(분석시점): -")
+            self.overall_confidence_label.setText("종합 신뢰도: -")
+            self.risk_level_label.setText("리스크 수준: -")
+            self.analysis_summary_text.setHtml("<p style='color:#AAAAAA; font-style:italic; font-size:10pt; padding:10px;'>AI 분석 데이터가 없거나 현재 종목과 일치하지 않습니다. 데이터를 로드 중이거나 분석을 기다려주세요.</p>")
+            return
 
-
-        # 통합 분석 부분
-        integrated_data = analysis_results.get('integrated_analysis', {})
-        overall_signal_text = integrated_data.get('short_term_outlook_label', '데이터 부족')
-        self.overall_signal_label.setText(overall_signal_text)
-
-        # 종합 판단 라벨 스타일링
-        if "긍정적" in overall_signal_text:
-            self.overall_signal_label.setStyleSheet("font-size: 16px; font-weight: bold; color: white; background-color: #4CAF50; padding: 5px; border-radius: 5px;")
-        elif "부정적" in overall_signal_text:
-            self.overall_signal_label.setStyleSheet("font-size: 16px; font-weight: bold; color: white; background-color: #F44336; padding: 5px; border-radius: 5px;")
-        elif "중립적" in overall_signal_text:
-            self.overall_signal_label.setStyleSheet("font-size: 16px; font-weight: bold; color: black; background-color: #FFC107; padding: 5px; border-radius: 5px;") # 주황색
-        else: # 데이터 부족, 판단 보류 등
-            self.overall_signal_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #AAAAAA; background-color: #555555; padding: 5px; border-radius: 5px;")
-
-        integrated_conf = integrated_data.get('confidence', 0.0)
-        self.integrated_confidence_label.setText(f"통합 분석 신뢰도: {integrated_conf:.0%}")
-
-
-        # 분석 요약 텍스트 구성
-        summary_lines = []
-        if ml_pred:
-            summary_lines.append(f"<b>[ML 예측]</b>")
-            summary_lines.append(f"  - 방향: {ml_pred.get('action', '-')}, 신뢰도: {ml_conf:.0%}" + (f", 목표가: ${target_p:.2f}" if target_p else ""))
-            summary_lines.append(f"  - 근거: {ml_pred.get('reason', 'N/A')}")
-            summary_lines.append("-" * 30)
-
-        if integrated_data:
-            summary_lines.append(f"<b>[통합 분석 ({integrated_data.get('short_term_outlook_label','-')})]</b>")
-            news_sum = integrated_data.get('news_analysis', {}).get('summary', '뉴스 분석 정보 없음.')
-            econ_sum = integrated_data.get('economic_event_analysis', {}).get('summary', '경제 이벤트 분석 정보 없음.')
-            summary_lines.append(f"  - 뉴스 요약: {news_sum}")
-            summary_lines.append(f"  - 경제 이벤트 요약: {econ_sum}")
-
-            positive_factors = integrated_data.get('key_positive_factors', [])
-            if positive_factors:
-                summary_lines.append(f"  - 주요 긍정 요인:")
-                for factor in positive_factors: summary_lines.append(f"    • {factor}")
-
-            risk_factors = integrated_data.get('key_risk_factors', [])
-            if risk_factors:
-                summary_lines.append(f"  - 주요 리스크 요인:")
-                for factor in risk_factors: summary_lines.append(f"    • {factor}")
-
-            # 최근 중요 경제 이벤트 표시
-            crit_events = integrated_data.get('economic_event_analysis', {}).get('upcoming_critical_events', [])
-            if crit_events:
-                summary_lines.append(f"  - 주요 예정 경제 이벤트 (최대 3개):")
-                for ev in crit_events[:3]:
-                    summary_lines.append(f"    • {ev['datetime']} {ev['country']} {ev['event_name']} (중요도: {ev['importance']})")
+        # 1. 종합 추천 섹션 업데이트
+        recommendation = predictions_data.get('recommendation', {})
+        action = recommendation.get('action', '데이터 분석중') # 기본값 변경
+        strength = recommendation.get('strength', '') # 기본값 변경
+        action_strength_text = f"{action}"
+        if strength and action != '데이터 분석중': # '데이터 분석중'일 때는 강도 표시 안함
+            action_strength_text += f" ({strength.capitalize()})"
         
-        if not summary_lines:
-            summary_lines.append("분석 정보가 없습니다.")
+        self.recommendation_action_label.setText(action_strength_text)
 
-        self.analysis_summary_text.setHtml("<br>".join(summary_lines)) # HTML 사용
+        current_price = predictions_data.get('current_price')
+        self.current_price_for_recommendation_label.setText(f"현재가(분석시점): ${current_price:.2f}" if current_price is not None else "현재가: -")
+
+        overall_conf = predictions_data.get('overall_confidence', 0.0)
+        self.overall_confidence_label.setText(f"종합 신뢰도: {overall_conf:.1%}") # 소수점 한 자리 %
+        
+        risk_level = recommendation.get('risk_level', 'N/A').capitalize()
+        self.risk_level_label.setText(f"리스크 수준: {risk_level}")
+
+        # 추천 행동에 따른 색상
+        # QLabel의 스타일시트에서 font-size를 가져오기 위해 getattr 사용 및 기본값 설정
+        base_style = f"font-size: {getattr(self, 'recommendation_action_font_size', '16pt')}; font-weight: bold;"
+        if action == 'BUY':
+            self.recommendation_action_label.setStyleSheet(f"{base_style} color: #4CAF50;") # 초록
+        elif action == 'SELL':
+            self.recommendation_action_label.setStyleSheet(f"{base_style} color: #F44336;") # 빨강
+        elif action == 'HOLD':
+            self.recommendation_action_label.setStyleSheet(f"{base_style} color: #FFC107;") # 주황
+        else: # 데이터 분석중 또는 기타
+            self.recommendation_action_label.setStyleSheet(f"{base_style} color: #E0E0E0;")
+
+        # 2. 상세 분석 내용 (HTML로 구성)
+        summary_html_lines = []
+        # 스타일 정의 (HTML 상단에 한 번만 정의하여 재사용)
+        styles = {
+            "h2": "font-size:14pt; color:#E0E0E0; margin-bottom:10px;",
+            "h3": "font-size:12pt; color:#D0D0D0; margin-top:15px; margin-bottom:8px;",
+            "h4": "font-size:11pt; color:#C0C0C0; margin-top:10px; margin-bottom:5px;",
+            "p_base": f"font-size:{getattr(self, 'default_font_size', '10pt')}; line-height:1.6;",
+            "p_factor": f"font-size:9pt; color:#B0B0B0; line-height:1.5;",
+            "ul_base": f"font-size:{getattr(self, 'default_font_size', '10pt')}; margin-left:0px; padding-left:20px; list-style-type: disclosure-closed;", # 목록 스타일 변경
+            "ul_factor": "font-size:9pt; margin-left:0px; padding-left:20px; color:#A0A0A0; list-style-type: circle;",
+            "positive_ret": "color:#4CAF50; font-weight:bold;",
+            "negative_ret": "color:#F44336; font-weight:bold;",
+            "neutral_ret": "color:#E0E0E0; font-weight:bold;",
+        }
+
+        summary_html_lines.append(f"<h2 style='{styles['h2']}'>종합 투자 추천 ({self.symbol})</h2>")
+        action_color = self.recommendation_action_label.styleSheet().split('color: ')[-1].split(';')[0] # 현재 레이블 색상 가져오기
+        summary_html_lines.append(f"<p style='{styles['p_base']}'><b>추천 행동:</b> <span style='color:{action_color}; font-weight:bold;'>{action_strength_text}</span></p>")
+        summary_html_lines.append(f"<p style='{styles['p_base']}'><b>현재가 (분석 시점):</b> ${current_price:.2f}</p>")
+        summary_html_lines.append(f"<p style='{styles['p_base']}'><b>종합 신뢰도:</b> {overall_conf:.1%}</p>")
+        summary_html_lines.append(f"<p style='{styles['p_base']}'><b>리스크 수준:</b> {risk_level}</p>")
+        
+        reasoning = recommendation.get('reasoning', [])
+        if reasoning:
+            summary_html_lines.append(f"<b style='font-size:{getattr(self, 'default_font_size', '10pt')};'>주요 근거:</b><ul style='{styles['ul_base']}'>")
+            for reason in reasoning:
+                summary_html_lines.append(f"<li>{reason}</li>")
+            summary_html_lines.append("</ul>")
+
+        suggested_strategy = recommendation.get('suggested_strategy')
+        if suggested_strategy:
+            summary_html_lines.append(f"<p style='{styles['p_base']}'><b>제안 전략:</b> {suggested_strategy}</p>")
+        
+        summary_html_lines.append(f"<hr><h3 style='{styles['h3']}'>기간별 상세 예측:</h3>")
+
+        timeframes_data = predictions_data.get('timeframes', {})
+        
+        def format_period_prediction(period_name: str, pred_detail: Dict, period_group_style: str) -> List[str]:
+            lines = []
+            pred_return = pred_detail.get('predicted_return', 0)
+            pred_price = pred_detail.get('predicted_price')
+            price_range_low, price_range_high = pred_detail.get('price_range', (None, None))
+            conf = pred_detail.get('confidence', 0)
+            factors = pred_detail.get('factors', []) 
+            if not factors: factors = pred_detail.get('key_factors',[])
+
+            news_impact_info = pred_detail.get('news_impact', {}) 
+            econ_impact_info = pred_detail.get('economic_impact', {}) 
+            
+            if pred_return > 0.01 : ret_style = styles['positive_ret'] # 미미한 변동은 중립으로
+            elif pred_return < -0.01: ret_style = styles['negative_ret']
+            else: ret_style = styles['neutral_ret']
+            
+            lines.append(f"<p style='{period_group_style}'><b>{period_name}:</b> <span style='{ret_style}'>{pred_return:+.2f}%</span> ")
+            lines.append(f"(예상가: ${pred_price:.2f}" if pred_price is not None else "(예상가: -)")
+            if price_range_low is not None and price_range_high is not None:
+                lines.append(f", 범위: ${price_range_low:.2f} ~ ${price_range_high:.2f}")
+            lines.append(f", 신뢰도: {conf:.1%})</p>")
+
+            if factors:
+                lines.append(f"<ul style='{styles['ul_factor']}'>")
+                for factor in factors: lines.append(f"<li>{factor}</li>")
+                lines.append("</ul>")
+            if news_impact_info and news_impact_info.get('impact') != 'neutral' and news_impact_info.get('news_count', 0) > 0 :
+                 lines.append(f"<p style='{styles['p_factor']}'>&nbsp;&nbsp;└ 뉴스 영향: {news_impact_info.get('impact', 'N/A')} (점수: {news_impact_info.get('score', 0):.2f}, 뉴스 {news_impact_info.get('news_count',0)}개)</p>")
+            if econ_impact_info and econ_impact_info.get('impact') != 'neutral' and econ_impact_info.get('key_indicators'):
+                lines.append(f"<p style='{styles['p_factor']}'>&nbsp;&nbsp;└ 경제지표 영향: {econ_impact_info.get('impact','N/A')}</p>")
+            return lines
+
+        # 기간별 예측 표시
+        term_map = {'short_term': "단기 (1일 ~ 3일)", 'medium_term': "중기 (1주일 ~ 2개월)", 'long_term': "장기 (3개월 이상)"}
+        for term_key, term_title in term_map.items():
+            term_preds = timeframes_data.get(term_key, {})
+            if term_preds:
+                summary_html_lines.append(f"<h4 style='{styles['h4']}'>{term_title}:</h4>")
+                # 기간(예: '1일', '1주일') 순서대로 정렬하기 위한 키 생성 함수
+                def sort_key_period(item_tuple):
+                    period_str = item_tuple[0] # 예: "1일", "2주일", "3개월"
+                    num_part = ''.join(filter(str.isdigit, period_str))
+                    unit_part = ''.join(filter(str.isalpha, period_str)).lower()
+                    num = int(num_part) if num_part else 0
+                    
+                    if '일' in unit_part: multiplier = 1
+                    elif '주' in unit_part: multiplier = 7
+                    elif '개월' in unit_part: multiplier = 30
+                    else: multiplier = 0
+                    return num * multiplier
+
+                sorted_periods = sorted(term_preds.items(), key=sort_key_period)
+
+                for period, detail in sorted_periods:
+                    summary_html_lines.extend(format_period_prediction(period, detail, styles['p_base']))
+                summary_html_lines.append("<br>")
+
+        if not summary_html_lines: # 모든 예측이 비어있을 경우
+             summary_html_lines.append(f"<p style='{styles['p_base']} color:#AAAAAA; font-style:italic;'>세부 예측 정보가 없습니다.</p>")
+
+        self.analysis_summary_text.setHtml("<div style='padding:5px;'>" + "".join(summary_html_lines) + "</div>")
+        logger.info(f"AI 분석 결과 UI 업데이트 완료 ({self.symbol}). 추천: {action_strength_text}")
