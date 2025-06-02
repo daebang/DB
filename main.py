@@ -24,6 +24,7 @@ def main():
     main_logger.info(f"설정 파일 경로: {settings.config_file_path}")
     main_logger.info(f"AlphaVantage Key 로드됨: {'Yes' if settings.api_config.alpha_vantage_key else 'No'}")
     main_logger.info(f"NewsAPI Key 로드됨: {'Yes' if settings.api_config.news_api_key else 'No'}")
+    main_logger.info(f"Tiingo API Key 로드됨: {'Yes' if settings.api_config.tiingo_api_key else 'No'}")
 
 
     # PyQt 애플리케이션 생성

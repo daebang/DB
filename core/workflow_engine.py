@@ -118,6 +118,9 @@ class WorkflowEngine:
         # 워커들이 종료될 때까지 기다림
         for worker in self.workers:
             worker.join(timeout=5)
+            if worker.is_alive():
+                self.event_manager.publish('task_warning', {'message': f"Worker thread {worker.name} did not terminate in time."})
+                print(f"Warning: Worker thread {worker.name} did not terminate in time.") # Or use logger
     
     def submit_task(self, task: Task):
         """작업 제출"""

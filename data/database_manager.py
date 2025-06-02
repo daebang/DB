@@ -343,13 +343,30 @@ class DatabaseManager:
         updated_count_total = 0
         
         records_to_process = []
-        for timestamp_idx, row in df_with_ta.iterrows():
-            ts = timestamp_idx.to_pydatetime() if isinstance(timestamp_idx, pd.Timestamp) else pd.to_datetime(timestamp_idx).to_pydatetime()
+        # df_with_ta is expected to have a 'timestamp' column with datetime objects
+        # (originating from MainController: data_with_indicators.reset_index())
+        for _, row in df_with_ta.iterrows(): # Use _, row as timestamp_idx is just an integer
+            timestamp_val = row.get('timestamp') # Get timestamp from the row's column
+            
+            if pd.isna(timestamp_val):
+                logger.warning(f"Skipping row due to missing timestamp for {symbol} ({timeframe}). Row: {row.to_dict()}")
+                continue
+
+            # Ensure ts is a Python datetime object
+            try:
+                ts = pd.to_datetime(timestamp_val).to_pydatetime()
+            except Exception as e:
+                logger.warning(f"Timestamp conversion failed for {timestamp_val} ({symbol}, {timeframe}): {e}. Skipping row.")
+                continue
+                
             for col_name in indicator_cols:
                 if col_name in row and pd.notna(row[col_name]):
                     records_to_process.append({
-                        'symbol': symbol, 'timeframe': timeframe, 'timestamp': ts,
-                        'indicator_name': col_name, 'value': float(row[col_name])
+                        'symbol': symbol, 
+                        'timeframe': timeframe, 
+                        'timestamp': ts, # Use the correctly parsed timestamp
+                        'indicator_name': col_name, 
+                        'value': float(row[col_name])
                     })
         
         try:
